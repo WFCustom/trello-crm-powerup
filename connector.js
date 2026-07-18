@@ -1,4 +1,4 @@
-/* global TrelloPowerUp, WFStage, WFRest */
+/* global TrelloPowerUp, WFStage, WFRest, WFPhase */
 
 const ICON = "./icon.svg";
 
@@ -19,14 +19,11 @@ function exceptionOrHandoffBadges(t, card, boardId) {
 async function timingBadge(t, card, boardId) {
   const authorized = await WFRest.isAuthorized(t).catch(() => false);
   if (!authorized) {
-    return {
-      text: "🔒 Enable timing",
-      color: "light-gray",
-      callback: async (t2) => {
-        await WFRest.authorize(t2);
-        return t2.closePopup && t2.closePopup();
-      }
-    };
+    // NOTE: card-badges (front of card) do not support a callback per Trello's
+    // API -- only card-detail-badges and card-buttons can react to clicks.
+    // This badge is informational only; the real "Enable job actions" button
+    // (see cardButtons below) is what actually triggers the auth popup.
+    return { text: "🔒 Timing off -- see Power-ups button", color: "light-gray" };
   }
 
   try {
@@ -123,10 +120,18 @@ async function cardButtons(t) {
 
   const authorized = await WFRest.isAuthorized(t).catch(() => false);
   if (!authorized) {
+    // Trello's API forbids calling client.authorize() directly from a
+    // capability callback (the browser won't recognize it as a user click
+    // and blocks the consent popup) -- so open a real popup with a button
+    // instead, per https://developer.atlassian.com/cloud/trello/power-ups/rest-api-client/
     return [{
       icon: ICON,
       text: "Enable job actions",
-      callback: async (t2) => { await WFRest.authorize(t2, "read,write"); }
+      callback: (t2) => t2.popup({
+        title: "Authorize to continue",
+        url: "./popups/authorize.html",
+        height: 160
+      })
     }];
   }
 
@@ -249,4 +254,10 @@ TrelloPowerUp.initialize({
   "card-detail-badges": (t) => cardDetailBadges(t).catch(() => []),
   "card-buttons": (t) => cardButtons(t).catch(() => []),
   "board-buttons": (t) => boardButtons(t)
+}, {
+  // Required for t.getRestApi() to work anywhere in this Power-Up (connector
+  // and every popup iframe) -- per Trello's docs, getRestApi() throws if
+  // appKey/appName aren't provided here. See rest-api-client docs.
+  appKey: window.WF_CONFIG.appKey,
+  appName: "Western Fabrication Ops"
 });
