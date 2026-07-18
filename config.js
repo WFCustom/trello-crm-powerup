@@ -28,15 +28,15 @@ window.WF_CONFIG = {
   // "Complete" button and can trigger the approval request -- they just
   // won't see the Approve button in the Manager Approvals view.
   // TODO: fill in with real Trello usernames.
-  managers: ["PUT_A_MANAGER_TRELLO_USERNAME_HERE"],
+  managers: [@bannista, @craigjacaway, @Dalejacaway, @westernfabpmt1],
 
   // Optional: which Trello usernames typically work each phase, used only to
   // pre-filter the "My Jobs" view. Leave a phase out (or the whole object
   // empty) and workers just get a manual phase picker instead -- nothing
   // breaks either way.
   phaseSpecialists: {
-    // "CAD": ["someusername"],
-    // "CNC Table": ["someusername"],
+    // "CAD": ["@dalejacaway, @bannista"],
+    // "CNC Table": ["@dalejacaway, @bannista"],
   },
 
   // Live, QuickBooks-driven hourly rates. A scheduled task (see
