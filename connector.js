@@ -204,46 +204,74 @@ async function cardButtons(t) {
   return buttons;
 }
 
+// Alternate on-card path (task: card-badges/card-buttons are confirmed not
+// rendering on real cards for reasons not yet root-caused, despite proven-
+// correct JS and working admin toggles). card-back-section is a structurally
+// different capability -- it renders a titled section low on the back of the
+// card via a real iframe, rather than a badge/button row -- so it's a good
+// independent test of whether ANY per-card capability can render at all.
+// Per docs: https://developer.atlassian.com/cloud/trello/power-ups/ui-functions/card-back-section/
+async function cardBackSection(t) {
+  const card = await t.card("id", "idList", "idBoard");
+  const stage = WFStage.getStageForList(card.idBoard, card.idList);
+  if (!stage || !stage.isWorkPhase) return null; // nothing to claim/time on non-work stages
+  return {
+    title: "Job Actions",
+    icon: ICON,
+    content: {
+      type: "iframe",
+      url: "./popups/card-back.html",
+      height: 240
+    }
+  };
+}
+
 function boardButtons(t) {
   return [
     {
       icon: ICON,
       text: "Ops Dashboard",
-      callback: (t2) => t2.popup({
+      // Fullscreen per request: "the entire board be filled with a pop up
+      // that populates pie charts, bar graphs, percentages..."
+      callback: (t2) => t2.modal({
         title: "Western Fabrication — Ops Dashboard",
         url: "./popups/dashboard.html",
-        height: 640,
-        width: 760
+        fullscreen: true,
+        accentColor: "#0079BF"
       })
     },
     {
       icon: ICON,
       text: "My Jobs",
-      callback: (t2) => t2.popup({
+      // Full board-view dashboard, not a cramped popup -- t.modal({fullscreen:true})
+      // is the doc-verified way to get a whole-screen overlay (t.popup() has a
+      // fixed, small width Trello won't let you override).
+      // https://developer.atlassian.com/cloud/trello/power-ups/ui-functions/modal/
+      callback: (t2) => t2.modal({
         title: "My Jobs",
         url: "./popups/myjobs.html",
-        height: 560,
-        width: 620
+        fullscreen: true,
+        accentColor: "#0079BF"
       })
     },
     {
       icon: ICON,
       text: "Manager Approvals",
-      callback: (t2) => t2.popup({
+      callback: (t2) => t2.modal({
         title: "Manager Approvals",
         url: "./popups/approvals.html",
-        height: 560,
-        width: 680
+        fullscreen: true,
+        accentColor: "#0079BF"
       })
     },
     {
       icon: ICON,
       text: "Team Performance",
-      callback: (t2) => t2.popup({
+      callback: (t2) => t2.modal({
         title: "Team Performance",
         url: "./popups/performance.html",
-        height: 680,
-        width: 820
+        fullscreen: true,
+        accentColor: "#0079BF"
       })
     }
   ];
@@ -263,6 +291,7 @@ TrelloPowerUp.initialize({
   "card-badges": logged("card-badges", cardBadges),
   "card-detail-badges": logged("card-detail-badges", cardDetailBadges),
   "card-buttons": logged("card-buttons", cardButtons),
+  "card-back-section": logged("card-back-section", cardBackSection),
   "board-buttons": (t) => boardButtons(t)
 }, {
   // Required for t.getRestApi() to work anywhere in this Power-Up (connector
