@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="../styles.css">
+  <style>
+    body { padding: 12px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .actions button { margin-top: 0; }
+    button.secondary {
+      background: #fff; color: #172b4d; border: 1px solid #dfe1e6;
+      border-radius: 3px; padding: 8px 14px; font-size: 14px; cursor: pointer;
+    }
+    button.secondary:hover { background: #f4f5f7; }
+    .slider-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+    .slider-row input[type=range] { flex: 1; }
+    .slider-row .pct { width: 40px; text-align: right; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div id="content" class="loading">Loading job actions…</div>
+
+  <script src="https://p.trellocdn.com/power-up.min.js"></script>
+  <script src="../config.js"></script>
+  <script src="../lib/stage.js"></script>
+  <script src="../lib/trello-rest.js"></script>
+  <script src="../lib/phase.js"></script>
+  <script src="./card-back.js"></script>
+</body>
+</html>
