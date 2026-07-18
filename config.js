@@ -21,7 +21,7 @@ window.WF_CONFIG = {
   // This is a public "app key", not a secret — safe to commit/host.
   // Do NOT reuse the key/token pair from earlier troubleshooting chats;
   // generate a fresh one for this Power-Up and see README "Security notes".
-  appKey: "PUT_YOUR_POWERUP_API_KEY_HERE",
+  appKey: https://wfcustom.github.io/trello-crm-powerup/,
 
   // Trello USERNAMES (not full names) allowed to approve a completed phase
   // and advance a card to the next stage. Anyone not listed still sees the
