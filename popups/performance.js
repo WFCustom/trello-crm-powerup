@@ -84,6 +84,69 @@ function renderTables() {
     '<p class="muted">"Revenue share" = each project\\u2019s margin split by their share of logged hours on it -- an estimate, not exact accounting. ' +
     "Labor cost/net contribution only show up if you've filled in <code>hourlyRates</code> in config.js for that username. " +
     '"Avg speed vs SLA": under 1.0x means faster than the configured SLA on average (green), over 1.15x flags consistently slow (red).</p></div>';
+
+  renderPerfCharts(byType, people);
+}
+
+let perfCharts = [];
+function renderPerfCharts(byType, people) {
+  perfCharts.forEach((c) => c.destroy());
+  perfCharts = [];
+
+  const wrap = document.createElement("div");
+  wrap.className = "section";
+  wrap.innerHTML =
+    '<h3>Visual Summary</h3>' +
+    '<div class="chart-row">' +
+    '<div class="chart-box"><canvas id="typeMarginChart"></canvas></div>' +
+    '<div class="chart-box"><canvas id="hoursChart"></canvas></div>' +
+    "</div>" +
+    '<div class="chart-box wide" style="margin-top:20px;"><canvas id="revenueShareChart"></canvas></div>';
+  content.appendChild(wrap);
+
+  if (typeof Chart === "undefined") return; // CDN blocked/unreachable -- tables above still work fine
+
+  perfCharts.push(new Chart(document.getElementById("typeMarginChart"), {
+    type: "bar",
+    data: {
+      labels: byType.map((b) => b.type),
+      datasets: [{ label: "Margin %", data: byType.map((b) => b.marginPct || 0), backgroundColor: "#0079bf" }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, title: { display: true, text: "Margin % by work type" } },
+      scales: { y: { beginAtZero: true, ticks: { callback: (v) => v + "%" } } }
+    }
+  }));
+
+  perfCharts.push(new Chart(document.getElementById("hoursChart"), {
+    type: "bar",
+    data: {
+      labels: people.map((p) => p.fullName),
+      datasets: [{ label: "Hours", data: people.map((p) => p.hours || 0), backgroundColor: "#6b778c" }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, title: { display: true, text: "Hours logged by person" } },
+      scales: { y: { beginAtZero: true } }
+    }
+  }));
+
+  const withMargin = people.filter((p) => p.attributedMargin != null && p.attributedMargin > 0);
+  perfCharts.push(new Chart(document.getElementById("revenueShareChart"), {
+    type: "pie",
+    data: {
+      labels: withMargin.map((p) => p.fullName),
+      datasets: [{
+        data: withMargin.map((p) => p.attributedMargin),
+        backgroundColor: ["#0079bf", "#4bce97", "#f5cd47", "#e2483d", "#6b778c", "#c377e0", "#ff8b00", "#00c2e0"]
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { title: { display: true, text: "Attributed margin share by person" } }
+    }
+  }));
 }
 
 async function render() {
