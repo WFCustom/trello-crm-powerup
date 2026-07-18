@@ -249,10 +249,20 @@ function boardButtons(t) {
   ];
 }
 
+// Temporary diagnostic wrapper -- logs the real error to the browser console
+// instead of silently swallowing it, so failures are visible while we
+// confirm the fix. Safe to leave in permanently; it never throws itself.
+function logged(label, fn) {
+  return (t) => Promise.resolve(fn(t)).catch((e) => {
+    console.warn("[Western Fabrication Ops] " + label + " failed:", e && e.stack ? e.stack : e);
+    return [];
+  });
+}
+
 TrelloPowerUp.initialize({
-  "card-badges": (t) => cardBadges(t).catch(() => []),
-  "card-detail-badges": (t) => cardDetailBadges(t).catch(() => []),
-  "card-buttons": (t) => cardButtons(t).catch(() => []),
+  "card-badges": logged("card-badges", cardBadges),
+  "card-detail-badges": logged("card-detail-badges", cardDetailBadges),
+  "card-buttons": logged("card-buttons", cardButtons),
   "board-buttons": (t) => boardButtons(t)
 }, {
   // Required for t.getRestApi() to work anywhere in this Power-Up (connector
