@@ -28,7 +28,7 @@ window.WF_CONFIG = {
   // "Complete" button and can trigger the approval request -- they just
   // won't see the Approve button in the Manager Approvals view.
   // TODO: fill in with real Trello usernames.
-  managers: [@bannista, @craigjacaway, @Dalejacaway, @westernfabpmt1],
+    managers: ["bannista", "craigjacaway", "dalejacaway", "westernfabpmt1"],
 
   // Optional: which Trello usernames typically work each phase, used only to
   // pre-filter the "My Jobs" view. Leave a phase out (or the whole object
