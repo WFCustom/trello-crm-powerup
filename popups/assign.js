@@ -1,4 +1,4 @@
-const t = TrelloPowerUp.iframe();
+const t = TrelloPowerUp.iframe({ appKey: window.WF_CONFIG.appKey, appName: "Western Fabrication Ops" });
 const content = document.getElementById("content");
 
 async function render() {

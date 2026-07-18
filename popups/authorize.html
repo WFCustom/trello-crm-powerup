@@ -5,15 +5,12 @@
   <link rel="stylesheet" href="../styles.css">
 </head>
 <body>
-  <h2>Handoff Log</h2>
-  <div id="log"></div>
-  <h3>Log a new handoff</h3>
-  <div id="form"></div>
+  <p>Job actions (claim, start, complete) need one-time read/write access to this board.</p>
+  <button id="go" class="primary" type="button">Click to authorize</button>
 
   <script src="https://p.trellocdn.com/power-up.min.js"></script>
   <script src="../config.js"></script>
-  <script src="../lib/stage.js"></script>
   <script src="../lib/trello-rest.js"></script>
-  <script src="./handoff.js"></script>
+  <script src="./authorize.js"></script>
 </body>
 </html>

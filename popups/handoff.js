@@ -1,4 +1,4 @@
-const t = TrelloPowerUp.iframe();
+const t = TrelloPowerUp.iframe({ appKey: window.WF_CONFIG.appKey, appName: "Western Fabrication Ops" });
 const logDiv = document.getElementById("log");
 const formDiv = document.getElementById("form");
 
