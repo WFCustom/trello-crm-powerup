@@ -35,8 +35,8 @@ window.WF_CONFIG = {
   // empty) and workers just get a manual phase picker instead -- nothing
   // breaks either way.
   phaseSpecialists: {
-    // "CAD": ["@dalejacaway, @bannista"],
-    // "CNC Table": ["@dalejacaway, @bannista"],
+        "CAD": ["dalejacaway", "bannista"],
+        "CNC Table": ["dalejacaway", "bannista"],
   },
 
   // Live, QuickBooks-driven hourly rates. A scheduled task (see
