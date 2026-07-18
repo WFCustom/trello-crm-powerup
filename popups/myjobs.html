@@ -3,11 +3,54 @@
 <head>
   <meta charset="utf-8">
   <link rel="stylesheet" href="../styles.css">
+  <style>
+    body { padding: 20px 28px 60px; max-width: 1200px; margin: 0 auto; }
+    .header-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+    .header-row select { width: auto; min-width: 220px; }
+    .job-card {
+      border: 1px solid #dfe1e6; border-radius: 6px; padding: 14px 16px;
+      margin-bottom: 12px; background: #fff;
+    }
+    .job-card .top-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .job-card .title { font-weight: 600; font-size: 15px; cursor: pointer; }
+    .job-card .title:hover { text-decoration: underline; color: #0079bf; }
+    .job-card .meta { color: var(--wf-gray); font-size: 12px; margin-top: 2px; }
+    .job-card .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .job-card .actions button { margin: 0; }
+    button.secondary {
+      background: #fff; color: #172b4d; border: 1px solid #dfe1e6;
+      border-radius: 3px; padding: 8px 14px; font-size: 14px; cursor: pointer;
+    }
+    button.secondary:hover { background: #f4f5f7; }
+    button.link {
+      background: none; border: none; color: #0079bf; padding: 0; font-size: 12px;
+      cursor: pointer; text-decoration: underline;
+    }
+    .slider-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; max-width: 320px; }
+    .slider-row input[type=range] { flex: 1; }
+    .slider-row .pct { width: 40px; text-align: right; font-weight: 600; font-size: 12px; }
+    .details { margin-top: 12px; border-top: 1px solid #f4f5f7; padding-top: 10px; display: none; }
+    .details.open { display: block; }
+    .details .col { display: flex; gap: 24px; flex-wrap: wrap; }
+    .details dl { margin: 0; }
+    .details dt { font-size: 11px; text-transform: uppercase; color: var(--wf-gray); margin-top: 6px; }
+    .details dd { margin: 0 0 4px; font-size: 13px; }
+    .attachment-list a {
+      display: inline-block; margin: 2px 8px 2px 0; font-size: 13px; color: #0079bf;
+      text-decoration: none; border: 1px solid #dfe1e6; border-radius: 3px; padding: 3px 8px;
+    }
+    .attachment-list a:hover { background: #f4f5f7; }
+    .segment-log { font-size: 12px; color: var(--wf-gray); margin-top: 8px; }
+    .segment-log li { margin-bottom: 2px; }
+    .empty-state { color: var(--wf-gray); font-style: italic; padding: 10px 0; }
+  </style>
 </head>
 <body>
-  <h2>My Jobs</h2>
-  <div id="phaseFilter"></div>
-  <div id="content" class="loading">Loading...</div>
+  <div class="header-row">
+    <h2 style="margin:0;">My Jobs</h2>
+    <div id="phaseFilter"></div>
+  </div>
+  <div id="content" class="loading">Loading…</div>
 
   <script src="https://p.trellocdn.com/power-up.min.js"></script>
   <script src="../config.js"></script>
