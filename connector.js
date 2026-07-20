@@ -292,7 +292,7 @@ TrelloPowerUp.initialize({
   "card-detail-badges": logged("card-detail-badges", cardDetailBadges),
   "card-buttons": logged("card-buttons", cardButtons),
   "card-back-section": logged("card-back-section", cardBackSection),
-  "board-buttons": (t) => boardButtons(t)
+  "board-buttons": (t) => boardButtons(t).concat(extraBoardButtons(t))
 }, {
   // Required for t.getRestApi() to work anywhere in this Power-Up (connector
   // and every popup iframe) -- per Trello's docs, getRestApi() throws if
@@ -300,3 +300,33 @@ TrelloPowerUp.initialize({
   appKey: window.WF_CONFIG.appKey,
   appName: "Western Fabrication Ops"
 });
+
+
+function extraBoardButtons(t) {
+    return [
+      {
+              icon: ICON,
+              text: "Assign / Claim Work",
+              // Card-level buttons/badges are stuck behind a Trello-side rendering
+              // stall (see cardBackSection comment above): this board-level modal
+              // gives every worker/manager a reliable way to claim, assign, and
+              // time work without depending on that broken per-card UI.
+              callback: (t2) => t2.modal({
+                        title: "Assign / Claim Work",
+                        url: "./popups/workboard.html",
+                        fullscreen: true,
+                        accentColor: "#0079BF"
+              })
+      },
+      {
+              icon: ICON,
+              text: "Team Roster",
+              callback: (t2) => t2.modal({
+                        title: "Team Roster",
+                        url: "./popups/roster.html",
+                        fullscreen: true,
+                        accentColor: "#0079BF"
+              })
+      }
+        ];
+}
