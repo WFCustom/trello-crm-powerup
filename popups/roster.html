@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="../styles.css">
+  <style>
+    body { padding: 20px 28px 60px; max-width: 900px; margin: 0 auto; }
+    h2 { margin: 28px 0 4px; font-size: 16px; }
+    .hint { color: #5e6c84; font-size: 12px; margin-bottom: 12px; }
+    .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #f4f5f7; border: 1px solid #dfe1e6; border-radius: 14px;
+      padding: 4px 6px 4px 12px; font-size: 13px;
+    }
+    .chip button {
+      margin: 0; padding: 0; width: 20px; height: 20px; line-height: 18px;
+      border-radius: 50%; border: none; background: #dfe1e6; color: #172b4d;
+      cursor: pointer; font-size: 13px;
+    }
+    .chip button:hover { background: #c9ccd1; }
+    .add-row { display: flex; gap: 8px; margin-bottom: 8px; }
+    .add-row input, .add-row select {
+      flex: 1; padding: 8px 10px; border: 1px solid #dfe1e6; border-radius: 3px; font-size: 14px;
+    }
+    .add-row button { margin: 0; }
+    .phase-block {
+      border: 1px solid #dfe1e6; border-radius: 6px; padding: 12px 14px; margin-bottom: 14px;
+    }
+    .phase-block h3 { margin: 0 0 8px; font-size: 14px; }
+    .error { color: #c9372c; font-size: 13px; margin-top: 6px; }
+    .saved { color: #216e4e; font-size: 13px; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div id="content" class="loading">Loading team roster…</div>
+  <script src="https://p.trellocdn.com/power-up.min.js"></script>
+  <script src="../config.js"></script>
+  <script src="../lib/stage.js"></script>
+  <script src="../lib/trello-rest.js"></script>
+  <script src="../lib/roster.js"></script>
+  <script src="./roster.js"></script>
+</body>
+</html>
