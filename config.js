@@ -62,10 +62,19 @@ window.WF_CONFIG = {
   // person. Deliberately NOT auto-matched by name similarity -- confirm
   // this by hand once, then the sync just references it every run.
   qbEmployeeMap: {
-    // Confirmed with Tallen (2026-07-29) -- do not re-map without asking.
-        "bannista": "Tallen M. Bannister",
-        "craigjacaway": "Michael Jacaway",
-        "dalejacaway": "micheal Dale Jacaway"
+    // Owner/managers (bannista, craigjacaway, dalejacaway) intentionally left
+        // OUT of this map -- their real pay shouldn't be plaintext-visible to
+        // anyone with board access. See chat 2026-07-29 for the open question
+        // on how (or whether) their labor cost still rolls into job-profit
+        // tracking without exposing the $/hr figure.
+        // Shop crew -- fill in real Trello usernames once their accounts exist
+        // (none created yet as of 2026-07-29):
+        // "TODO-tracy": "<QuickBooks display name>",   // Tracy
+        // "TODO-kevin": "<QuickBooks display name>",   // Kevin Jeppson
+        // "TODO-mike": "<QuickBooks display name>",    // Mike Larsen
+        // "TODO-scott": "<QuickBooks display name>",   // Scott VanWorkom
+        // "TODO-chris": "<QuickBooks display name>",   // Chris Jacaway (occasional)
+        // "TODO-newhire": "<QuickBooks display name>", // starting ~1 week out
   },
 
   boards: {
