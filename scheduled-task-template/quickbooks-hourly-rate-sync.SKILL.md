@@ -37,8 +37,9 @@ CONSTANTS (fill in before scheduling):
                                                  # Operations -> Miscellaneous
                                                  # -> "CONFIG: Hourly Rates"
   EMPLOYEE_MAP = {
-    # "trellousername": "QuickBooks Employee Display Name",
-    # TODO -- add one line per person. Do not guess/fuzzy-match names;
+    "bannista": "Tallen M. Bannister",
+    "craigjacaway": "Michael Jacaway",
+    "dalejacaway": "micheal Dale Jacaway",
     # leave someone out rather than risk attaching the wrong rate to the
     # wrong person.
   }
