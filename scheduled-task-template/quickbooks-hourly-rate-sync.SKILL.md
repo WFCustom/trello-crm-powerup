@@ -37,9 +37,16 @@ CONSTANTS (fill in before scheduling):
                                                  # Operations -> Miscellaneous
                                                  # -> "CONFIG: Hourly Rates"
   EMPLOYEE_MAP = {
-    "bannista": "Tallen M. Bannister",
-    "craigjacaway": "Michael Jacaway",
-    "dalejacaway": "micheal Dale Jacaway",
+    # Owner/managers (bannista, craigjacaway, dalejacaway) intentionally left
+    # OUT -- their real pay shouldn't be plaintext-visible on Trello. See
+    # chat 2026-07-29 for the open question on job-profit attribution.
+    # Shop crew -- fill in once accounts exist (none yet as of 2026-07-29):
+    # "TODO-tracy": "<QuickBooks display name>",
+    # "TODO-kevin": "<QuickBooks display name>",
+    # "TODO-mike": "<QuickBooks display name>",
+    # "TODO-scott": "<QuickBooks display name>",
+    # "TODO-chris": "<QuickBooks display name>",
+    # "TODO-newhire": "<QuickBooks display name>",
     # leave someone out rather than risk attaching the wrong rate to the
     # wrong person.
   }
