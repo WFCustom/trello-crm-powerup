@@ -62,7 +62,10 @@ window.WF_CONFIG = {
   // person. Deliberately NOT auto-matched by name similarity -- confirm
   // this by hand once, then the sync just references it every run.
   qbEmployeeMap: {
-    // "trellousername": "QuickBooks Employee Display Name"
+    // Confirmed with Tallen (2026-07-29) -- do not re-map without asking.
+        "bannista": "Tallen M. Bannister",
+        "craigjacaway": "Michael Jacaway",
+        "dalejacaway": "micheal Dale Jacaway"
   },
 
   boards: {
