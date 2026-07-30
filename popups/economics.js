@@ -22,7 +22,17 @@ async function tryPrefillFromQuickBooksBridge(card) {
 async function render() {
   const card = await t.card("id", "idBoard");
   const existing = (await t.get("card", "shared", "economics", null)) || {};
+  const phaseLog = (await t.get("card", "shared", "phaseLog", [])) || [];
   const bridge = await tryPrefillFromQuickBooksBridge(card);
+
+  // Management overhead: a flat % of job value, folded into cost, whenever
+  // an owner/manager username shows up as claimedBy in this card's phase
+  // log -- never a named rate, just one blended line. See config.js
+  // managementOverhead.
+  const overheadCfg = window.WF_CONFIG.managementOverhead;
+  const managementTouchedThisCard = !!(overheadCfg && phaseLog.some(
+    (e) => e.claimedBy && overheadCfg.usernames.indexOf(e.claimedBy.username) !== -1
+  ));
 
   const value = existing.value !== undefined ? existing.value : (bridge && bridge.jobValue) || "";
   const cost = existing.cost !== undefined ? existing.cost : (bridge && bridge.jobCost) || "";
@@ -36,7 +46,10 @@ async function render() {
     '<button class="primary" id="save">Save</button>' +
     (bridge && (bridge.jobValue || bridge.jobCost)
       ? '<p class="muted">Prefilled from QuickBooks bridge custom fields where available.</p>'
-      : '<p class="muted">No QuickBooks bridge data found on this card yet -- enter manually.</p>');
+      : '<p class="muted">No QuickBooks bridge data found on this card yet -- enter manually.</p>') +
+    (managementTouchedThisCard
+      ? '<p class="muted">Includes a management overhead line below -- a blended %, never a named rate.</p>'
+      : '');
 
   const valueInput = document.getElementById("value");
   const costInput = document.getElementById("cost");
@@ -45,10 +58,14 @@ async function render() {
   function updateMargin() {
     const v = parseFloat(valueInput.value) || 0;
     const c = parseFloat(costInput.value) || 0;
-    const margin = v - c;
+    const overhead = (managementTouchedThisCard && overheadCfg)
+      ? v * (overheadCfg.percentOfJobValue || 0) / 100
+      : 0;
+    const margin = v - c - overhead;
     const pct = v ? Math.round((margin / v) * 1000) / 10 : null;
     marginDiv.innerHTML =
-      "<strong>Margin: " + fmtMoney(margin) + (pct !== null ? " (" + pct + "%)" : "") + "</strong>";
+      "<strong>Margin: " + fmtMoney(margin) + (pct !== null ? " (" + pct + "%)" : "") + "</strong>" +
+      (overhead ? '<br><span class="muted">includes ' + fmtMoney(overhead) + " management overhead</span>" : "");
   }
   valueInput.addEventListener("input", updateMargin);
   costInput.addEventListener("input", updateMargin);
