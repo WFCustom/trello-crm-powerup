@@ -63,10 +63,10 @@ window.WF_CONFIG = {
   // this by hand once, then the sync just references it every run.
   qbEmployeeMap: {
     // Owner/managers (bannista, craigjacaway, dalejacaway) intentionally left
-        // OUT of this map -- their real pay shouldn't be plaintext-visible to
-        // anyone with board access. See chat 2026-07-29 for the open question
-        // on how (or whether) their labor cost still rolls into job-profit
-        // tracking without exposing the $/hr figure.
+    // OUT of this map -- their real pay shouldn't be plaintext-visible to
+    // anyone with board access. RESOLVED 2026-07-29: their labor cost is
+    // instead folded into job cost as a flat, unnamed % of job value --
+    // see managementOverhead below, never a per-person rate here.
         // Shop crew -- fill in real Trello usernames once their accounts exist
         // (none created yet as of 2026-07-29):
         // "TODO-tracy": "<QuickBooks display name>",   // Tracy
@@ -75,6 +75,18 @@ window.WF_CONFIG = {
         // "TODO-scott": "<QuickBooks display name>",   // Scott VanWorkom
         // "TODO-chris": "<QuickBooks display name>",   // Chris Jacaway (occasional)
         // "TODO-newhire": "<QuickBooks display name>", // starting ~1 week out
+  },
+
+  // Owner/manager labor cost is never tracked as a named $/hr rate (see
+  // qbEmployeeMap above) -- their pay stays private. Instead, whenever one
+  // of these usernames appears as the person who actually performed
+  // (claimed) a logged work phase on a card, a flat percentage of that
+  // job's VALUE is added to its cost as one unnamed "management overhead"
+  // line in every margin calculation (card badge, Job Economics popup,
+  // Team Performance). No individual name or dollar rate is ever shown.
+  managementOverhead: {
+    percentOfJobValue: 8,  // PLACEHOLDER -- confirm the real number with Tallen
+    usernames: ["bannista", "craigjacaway", "dalejacaway"]
   },
 
   boards: {

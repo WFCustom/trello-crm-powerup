@@ -58,10 +58,22 @@ async function cardDetailBadges(t) {
 
   const economics = await t.get("card", "shared", "economics", null);
   const handoffLog = (await t.get("card", "shared", "handoffLog", [])) || [];
+  const phaseLog = (await t.get("card", "shared", "phaseLog", [])) || [];
   const stage = WFStage.getStageForList(boardId, card.idList);
 
+  // Management overhead: a flat % of job value, added to cost, whenever an
+  // owner/manager username shows up as claimedBy in this card's phase log --
+  // never a named rate, just one blended line. See config.js managementOverhead.
+  const overheadCfg = window.WF_CONFIG.managementOverhead;
+  const managementTouchedThisCard = !!(overheadCfg && phaseLog.some(
+    (e) => e.claimedBy && overheadCfg.usernames.indexOf(e.claimedBy.username) !== -1
+  ));
+  const overheadAmount = (economics && economics.value && managementTouchedThisCard && overheadCfg)
+    ? Number(economics.value) * (overheadCfg.percentOfJobValue || 0) / 100
+    : 0;
+
   const marginText = economics && economics.value
-    ? "$" + Number(economics.value - (economics.cost || 0)).toLocaleString() + " margin"
+    ? "$" + Number(economics.value - (economics.cost || 0) - overheadAmount).toLocaleString() + " margin"
     : "Set job value/cost";
 
   const badges = [];
