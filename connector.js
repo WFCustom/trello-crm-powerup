@@ -91,35 +91,35 @@ async function cardDetailBadges(t) {
   }
 
   badges.push({
+    title: "Stage Timeline",
+    text: "View timing history",
+    icon: ICON,
+    callback: (t2) => t2.popup({
       title: "Stage Timeline",
-      text: "View timing history",
-      icon: ICON,
-      callback: (t2) => t2.popup({
-        title: "Stage Timeline",
-        url: "./popups/timing.html",
-        height: 420
-      })
-    },
-    {
+      url: "./popups/timing.html",
+      height: 420
+    })
+  },
+  {
+    title: "Job Economics",
+    text: marginText,
+    icon: ICON,
+    callback: (t2) => t2.popup({
       title: "Job Economics",
-      text: marginText,
-      icon: ICON,
-      callback: (t2) => t2.popup({
-        title: "Job Economics",
-        url: "./popups/economics.html",
-        height: 320
-      })
-    },
-    {
+      url: "./popups/economics.html",
+      height: 320
+    })
+  },
+  {
+    title: "Handoff Log",
+    text: handoffLog.length ? handoffLog.length + " handoff(s) logged" : "Log a handoff",
+    icon: ICON,
+    callback: (t2) => t2.popup({
       title: "Handoff Log",
-      text: handoffLog.length ? handoffLog.length + " handoff(s) logged" : "Log a handoff",
-      icon: ICON,
-      callback: (t2) => t2.popup({
-        title: "Handoff Log",
-        url: "./popups/handoff.html",
-        height: 420
-      })
-    }
+      url: "./popups/handoff.html",
+      height: 420
+    })
+  }
   );
 
   return badges;
@@ -242,6 +242,20 @@ function boardButtons(t) {
   return [
     {
       icon: ICON,
+      text: "Ops",
+      // Consolidated window: one fullscreen modal with navigable tabs
+      // (Dashboard / Work board / My jobs / Approvals / Performance / Roster)
+      // replacing the separate board buttons below. Deep-link a tab with
+      // "./popups/ops.html#approvals".
+      callback: (t2) => t2.modal({
+        title: "Western Fabrication Ops",
+        url: "./popups/ops.html",
+        fullscreen: true,
+        accentColor: "#14293d"
+      })
+    },
+    {
+      icon: ICON,
       text: "Ops Dashboard",
       // Fullscreen per request: "the entire board be filled with a pop up
       // that populates pie charts, bar graphs, percentages..."
@@ -313,32 +327,31 @@ TrelloPowerUp.initialize({
   appName: "Western Fabrication Ops"
 });
 
-
 function extraBoardButtons(t) {
-    return [
-      {
-              icon: ICON,
-              text: "Assign / Claim Work",
-              // Card-level buttons/badges are stuck behind a Trello-side rendering
-              // stall (see cardBackSection comment above): this board-level modal
-              // gives every worker/manager a reliable way to claim, assign, and
-              // time work without depending on that broken per-card UI.
-              callback: (t2) => t2.modal({
-                        title: "Assign / Claim Work",
-                        url: "./popups/workboard.html",
-                        fullscreen: true,
-                        accentColor: "#0079BF"
-              })
-      },
-      {
-              icon: ICON,
-              text: "Team Roster",
-              callback: (t2) => t2.modal({
-                        title: "Team Roster",
-                        url: "./popups/roster.html",
-                        fullscreen: true,
-                        accentColor: "#0079BF"
-              })
-      }
-        ];
+  return [
+    {
+      icon: ICON,
+      text: "Assign / Claim Work",
+      // Card-level buttons/badges are stuck behind a Trello-side rendering
+      // stall (see cardBackSection comment above): this board-level modal
+      // gives every worker/manager a reliable way to claim, assign, and
+      // time work without depending on that broken per-card UI.
+      callback: (t2) => t2.modal({
+        title: "Assign / Claim Work",
+        url: "./popups/workboard.html",
+        fullscreen: true,
+        accentColor: "#0079BF"
+      })
+    },
+    {
+      icon: ICON,
+      text: "Team Roster",
+      callback: (t2) => t2.modal({
+        title: "Team Roster",
+        url: "./popups/roster.html",
+        fullscreen: true,
+        accentColor: "#0079BF"
+      })
+    }
+  ];
 }
