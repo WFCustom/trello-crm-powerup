@@ -197,7 +197,27 @@
   function cards(opts) {
     var key = (opts && opts.filter) || "open";
     if (!cardCache[key]) {
-      cardCache[key] = WFRest.getBoardCardsFull(t, ctx.board.id, opts || {});
+      cardCache[key] = Promise.all([
+        WFRest.getBoardCardsFull(t, ctx.board.id, opts || {}),
+        // Pricing lives in the "$Value" custom field that sales already keeps
+        // up to date. Never let a pricing failure take the whole view down.
+        WFPricing.getBoardValues(t, ctx.board.id, opts || {}).catch(function () { return {}; })
+      ]).then(function (r) {
+        var list = r[0] || [], byCard = r[1] || {};
+        list.forEach(function (c) {
+          var fromField = byCard[c.id];
+          if (fromField == null) return;
+          c.fieldValue = fromField;
+          c.economics = c.economics || {};
+          // A figure typed into Job Economics is a deliberate override, so it
+          // wins. Otherwise $Value fills it in, tagged so the UI can say so.
+          if (c.economics.value == null || c.economics.value === "") {
+            c.economics.value = fromField;
+            c.economics.valueFrom = WFPricing.fieldName();
+          }
+        });
+        return list;
+      });
     }
     return cardCache[key];
   }
@@ -205,6 +225,7 @@
   function reload() {
     cardCache = {};
     WFRest.invalidateBoardCards(ctx.board.id);
+    WFPricing.invalidate(ctx.board.id);
     return renderActive();
   }
 
