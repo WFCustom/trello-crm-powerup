@@ -121,12 +121,44 @@
     return row;
   }
 
+  /* House rule: a price is a number or a range of two numbers. Trello has no
+     currency field type, so "$Value" is free text and the rule can't be
+     enforced at entry -- surface what breaks it instead. Off-rule values are
+     still counted (best-effort number) so the figures above stay usable. */
+  function priceCleanup(ctx, offRule) {
+    var panel = O.panel(
+      "Prices needing cleanup",
+      offRule.length + (offRule.length === 1 ? " job" : " jobs") + " · " + WFPricing.RULE_TEXT
+    );
+    panel.body(O.el("div.wf-list", null, offRule.slice(0, 8).map(function (o) {
+      return O.el("div.wf-row", { style: "grid-template-columns:1.4fr 1.3fr 130px auto" },
+        O.el("div", null,
+          O.el("div.wf-job", { text: o.name }),
+          O.el("div.wf-jobsub", { text: WFPricing.fieldName() + ": " + o.raw })),
+        O.el("div", { style: "font-size:13px;color:var(--wf-muted)",
+          text: o.value == null ? "no number found" : "counting it as " + O.money(o.value) }),
+        O.el("div", null, O.tag(o.value == null ? "unusable" : "off-rule", o.value == null ? "late" : "warn")),
+        O.el("div.wf-actions", null,
+          O.btn("Fix it", { onClick: function () { O.openCard({ id: o.id, shortUrl: o.url }); } })));
+    })));
+    if (offRule.length > 8) {
+      panel.appendChild(O.el("div.muted", { style: "padding-top:10px",
+        text: "+ " + (offRule.length - 8) + " more" }));
+    }
+    return panel;
+  }
+
   O.tab({
     id: "dashboard",
     label: "Dashboard",
     managerOnly: true,
     render: function (ctx) {
-      return ctx.cards().then(function (cards) {
+      return Promise.all([
+        ctx.cards(),
+        // Same cached fetch ops.js already made -- no extra REST call.
+        WFPricing.getBoardAudit(ctx.t, ctx.board.id).catch(function () { return []; })
+      ]).then(function (loaded) {
+        var cards = loaded[0], offRule = loaded[1] || [];
         if (!ctx.boardCfg) {
           return O.empty("This board isn't mapped in config.js yet — add it to WF_CONFIG.boards to switch the dashboard on.");
         }
@@ -171,7 +203,8 @@
           : O.el("div.muted", { style: "padding:14px 2px", text: "Nothing is over its time allowance right now." }));
 
         return O.el("div", null, head, stats,
-          O.el("div.wf-panels.split", null, occupancy, health), list);
+          O.el("div.wf-panels.split", null, occupancy, health), list,
+          offRule.length ? priceCleanup(ctx, offRule) : null);
       });
     }
   });
