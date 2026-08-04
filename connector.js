@@ -239,65 +239,19 @@ async function cardBackSection(t) {
 }
 
 function boardButtons(t) {
+  // One consolidated entry point. Everything that used to be its own board
+  // button (Ops Dashboard, My Jobs, Manager Approvals, Team Performance,
+  // Assign / Claim Work, Team Roster) is now a tab inside this window.
+  // Deep-link a specific tab with "./popups/ops.html#approvals".
   return [
     {
       icon: ICON,
-      text: "Ops",
-      // Consolidated window: one fullscreen modal with navigable tabs
-      // (Dashboard / Work board / My jobs / Approvals / Performance / Roster)
-      // replacing the separate board buttons below. Deep-link a tab with
-      // "./popups/ops.html#approvals".
+      text: "WF Ops Dashboard",
       callback: (t2) => t2.modal({
-        title: "Western Fabrication Ops",
+        title: "WF Ops Dashboard",
         url: "./popups/ops.html",
         fullscreen: true,
         accentColor: "#14293d"
-      })
-    },
-    {
-      icon: ICON,
-      text: "Ops Dashboard",
-      // Fullscreen per request: "the entire board be filled with a pop up
-      // that populates pie charts, bar graphs, percentages..."
-      callback: (t2) => t2.modal({
-        title: "Western Fabrication — Ops Dashboard",
-        url: "./popups/dashboard.html",
-        fullscreen: true,
-        accentColor: "#0079BF"
-      })
-    },
-    {
-      icon: ICON,
-      text: "My Jobs",
-      // Full board-view dashboard, not a cramped popup -- t.modal({fullscreen:true})
-      // is the doc-verified way to get a whole-screen overlay (t.popup() has a
-      // fixed, small width Trello won't let you override).
-      // https://developer.atlassian.com/cloud/trello/power-ups/ui-functions/modal/
-      callback: (t2) => t2.modal({
-        title: "My Jobs",
-        url: "./popups/myjobs.html",
-        fullscreen: true,
-        accentColor: "#0079BF"
-      })
-    },
-    {
-      icon: ICON,
-      text: "Manager Approvals",
-      callback: (t2) => t2.modal({
-        title: "Manager Approvals",
-        url: "./popups/approvals.html",
-        fullscreen: true,
-        accentColor: "#0079BF"
-      })
-    },
-    {
-      icon: ICON,
-      text: "Team Performance",
-      callback: (t2) => t2.modal({
-        title: "Team Performance",
-        url: "./popups/performance.html",
-        fullscreen: true,
-        accentColor: "#0079BF"
       })
     }
   ];
@@ -318,7 +272,7 @@ TrelloPowerUp.initialize({
   "card-detail-badges": logged("card-detail-badges", cardDetailBadges),
   "card-buttons": logged("card-buttons", cardButtons),
   "card-back-section": logged("card-back-section", cardBackSection),
-  "board-buttons": (t) => boardButtons(t).concat(extraBoardButtons(t))
+  "board-buttons": boardButtons
 }, {
   // Required for t.getRestApi() to work anywhere in this Power-Up (connector
   // and every popup iframe) -- per Trello's docs, getRestApi() throws if
@@ -326,32 +280,3 @@ TrelloPowerUp.initialize({
   appKey: window.WF_CONFIG.appKey,
   appName: "Western Fabrication Ops"
 });
-
-function extraBoardButtons(t) {
-  return [
-    {
-      icon: ICON,
-      text: "Assign / Claim Work",
-      // Card-level buttons/badges are stuck behind a Trello-side rendering
-      // stall (see cardBackSection comment above): this board-level modal
-      // gives every worker/manager a reliable way to claim, assign, and
-      // time work without depending on that broken per-card UI.
-      callback: (t2) => t2.modal({
-        title: "Assign / Claim Work",
-        url: "./popups/workboard.html",
-        fullscreen: true,
-        accentColor: "#0079BF"
-      })
-    },
-    {
-      icon: ICON,
-      text: "Team Roster",
-      callback: (t2) => t2.modal({
-        title: "Team Roster",
-        url: "./popups/roster.html",
-        fullscreen: true,
-        accentColor: "#0079BF"
-      })
-    }
-  ];
-}
