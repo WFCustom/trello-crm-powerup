@@ -32,7 +32,10 @@
     var pctOut = O.el("span.pct", { text: pct + "%" });
     slider.addEventListener("input", function () { pctOut.textContent = slider.value + "%"; });
     slider.addEventListener("change", function () {
-      WFPhase.setPercentComplete(ctx.t, meta(ctx, card), Number(slider.value)).catch(function () {});
+      // No re-render here on purpose -- redrawing mid-drag would yank the slider
+      // out from under the user. The label already moved; the write just lands.
+      WFPhase.setPercentComplete(ctx.t, meta(ctx, card), Number(slider.value))
+        .catch(function () { window.alert("Couldn't save the percentage."); });
     });
 
     var p = O.panel(card.name, stage ? stage.name : "");
@@ -48,13 +51,16 @@
               busyText: "…",
               onClick: function () {
                 var go = WFPhase.isRunning(w) ? WFPhase.pause : WFPhase.resume;
-                return go(ctx.t, meta(ctx, card)).then(ctx.reload);
+                return go(ctx.t, meta(ctx, card)).then(function () { return ctx.syncCard(card.id); });
               }
             }),
             O.btn("Open card", { quiet: true, onClick: function () { O.openCard(card); } }),
             O.btn("I'm done with this phase", {
               primary: true, busyText: "Sending for approval…",
-              onClick: function () { return WFPhase.complete(ctx.t, meta(ctx, card)).then(ctx.reload); }
+              onClick: function () {
+                return WFPhase.complete(ctx.t, meta(ctx, card))
+                  .then(function () { return ctx.syncCard(card.id); });
+              }
             })))));
     return p;
   }
@@ -68,7 +74,10 @@
       O.el("div.wf-actions", null,
         O.btn("Take it", {
           primary: true, busyText: "Claiming…",
-          onClick: function () { return WFPhase.claimAndStart(ctx.t, meta(ctx, card), ctx.member).then(ctx.reload); }
+          onClick: function () {
+            return WFPhase.claimAndStart(ctx.t, meta(ctx, card), ctx.member)
+              .then(function () { return ctx.syncCard(card.id); });
+          }
         })));
   }
 
@@ -83,12 +92,16 @@
           busyText: "…",
           onClick: function () {
             var why = window.prompt("Why are you passing on this one? (optional)") || "";
-            return WFPhase.declineAssignment(ctx.t, meta(ctx, card), ctx.member, why).then(ctx.reload);
+            return WFPhase.declineAssignment(ctx.t, meta(ctx, card), ctx.member, why)
+              .then(function () { return ctx.syncCard(card.id); });
           }
         }),
         O.btn("Start it", {
           primary: true, busyText: "Starting…",
-          onClick: function () { return WFPhase.acceptAssignment(ctx.t, meta(ctx, card)).then(ctx.reload); }
+          onClick: function () {
+            return WFPhase.acceptAssignment(ctx.t, meta(ctx, card))
+              .then(function () { return ctx.syncCard(card.id); });
+          }
         })));
   }
 
@@ -149,7 +162,11 @@
               O.el("div.wf-actions", null,
                 O.btn("Undo", {
                   busyText: "…",
-                  onClick: function () { return WFPhase.undoComplete(ctx.t, meta(ctx, r[0])).then(ctx.reload); }
+                  onClick: function () {
+                    var cid = r[0].id;
+                    return WFPhase.undoComplete(ctx.t, meta(ctx, r[0]))
+                      .then(function () { return ctx.syncCard(cid); });
+                  }
                 })));
           })));
         }

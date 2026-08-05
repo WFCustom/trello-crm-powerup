@@ -93,12 +93,16 @@
         busyText: "Assigning…",
         onClick: function () {
           if (!sel.value) return;
-          return WFPhase.assign(ctx.t, meta, ctx.member, { username: sel.value }).then(ctx.reload);
+          return WFPhase.assign(ctx.t, meta, ctx.member, { username: sel.value })
+            .then(function () { return ctx.syncCard(card.id); });
         }
       }));
       actions.appendChild(O.btn("Claim it", {
         primary: true, busyText: "Claiming…",
-        onClick: function () { return WFPhase.claimAndStart(ctx.t, meta, ctx.member).then(ctx.reload); }
+        onClick: function () {
+          return WFPhase.claimAndStart(ctx.t, meta, ctx.member)
+            .then(function () { return ctx.syncCard(card.id); });
+        }
       }));
     } else if (st === "assigned") {
       var resel = assignSelect(ctx, stage.name);
@@ -107,26 +111,37 @@
         busyText: "Reassigning…",
         onClick: function () {
           if (!resel.value) return;
-          return WFPhase.assign(ctx.t, meta, ctx.member, { username: resel.value }).then(ctx.reload);
+          return WFPhase.assign(ctx.t, meta, ctx.member, { username: resel.value })
+            .then(function () { return ctx.syncCard(card.id); });
         }
       }));
       actions.appendChild(O.btn("Start it", {
         primary: true, busyText: "Starting…",
-        onClick: function () { return WFPhase.acceptAssignment(ctx.t, meta).then(ctx.reload); }
+        onClick: function () {
+          return WFPhase.acceptAssignment(ctx.t, meta)
+            .then(function () { return ctx.syncCard(card.id); });
+        }
       }));
     } else if (st === "review") {
       actions.appendChild(O.btn("Send back", {
         busyText: "Sending…",
         onClick: function () {
           var reason = window.prompt("What needs fixing? (optional)") || "";
-          return WFPhase.reject(ctx.t, meta, ctx.member, reason).then(ctx.reload);
+          return WFPhase.reject(ctx.t, meta, ctx.member, reason)
+            .then(function () { return ctx.syncCard(card.id); });
         }
       }));
       actions.appendChild(O.btn("Approve & move on", {
         primary: true, busyText: "Approving…",
         onClick: function () {
           if (!ctx.isManager) { window.alert("Only managers can approve a phase."); return; }
-          return WFPhase.approveAndAdvance(ctx.t, meta, ctx.member).then(ctx.reload);
+          // Approving moves the card; the SDK won't report the new list, so pass
+          // the destination we already know.
+          var target = WFStage.getNextStage(ctx.board.id, card.idList);
+          return WFPhase.approveAndAdvance(ctx.t, meta, ctx.member)
+            .then(function () {
+              return ctx.syncCard(card.id, target ? { idList: target.listId } : null);
+            });
         }
       }));
     } else {
@@ -135,12 +150,15 @@
         busyText: "…",
         onClick: function () {
           var p = st === "running" ? WFPhase.pause(ctx.t, meta) : WFPhase.resume(ctx.t, meta);
-          return p.then(ctx.reload);
+          return p.then(function () { return ctx.syncCard(card.id); });
         }
       }));
       actions.appendChild(O.btn("Mark done", {
         primary: true, busyText: "Finishing…",
-        onClick: function () { return WFPhase.complete(ctx.t, meta).then(ctx.reload); }
+        onClick: function () {
+          return WFPhase.complete(ctx.t, meta)
+            .then(function () { return ctx.syncCard(card.id); });
+        }
       }));
       if (!mine) actions.firstChild.title = "Claimed by " + w.claimedBy.fullName;
     }

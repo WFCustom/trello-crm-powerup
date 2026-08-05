@@ -36,13 +36,20 @@
           busyText: "Sending…",
           onClick: function () {
             var why = window.prompt("What needs fixing? (optional)") || "";
-            return WFPhase.reject(ctx.t, meta(ctx, card), ctx.member, why).then(ctx.reload);
+            return WFPhase.reject(ctx.t, meta(ctx, card), ctx.member, why)
+              .then(function () { return ctx.syncCard(card.id); });
           }
         }),
         O.btn(next ? "Approve → " + next : "Approve", {
           primary: true, busyText: "Approving…",
           onClick: function () {
-            return WFPhase.approveAndAdvance(ctx.t, meta(ctx, card), ctx.member).then(ctx.reload);
+            // Approving moves the card, and the SDK can't tell us the new list,
+            // so hand syncCard the destination we already computed.
+            var target = WFStage.getNextStage(ctx.board.id, card.idList);
+            return WFPhase.approveAndAdvance(ctx.t, meta(ctx, card), ctx.member)
+              .then(function () {
+                return ctx.syncCard(card.id, target ? { idList: target.listId } : null);
+              });
           }
         })));
   }
