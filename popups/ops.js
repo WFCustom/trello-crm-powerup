@@ -14,6 +14,10 @@
  *   ctx.isManager  bool
  *   ctx.cards()    -> Promise<cards>  (cached; pass {filter:'all'} for archived)
  *   ctx.reload()   invalidate the card cache and re-render the active tab
+ *   ctx.syncCard(id, extra?)  re-read ONE card's phase state through the SDK and
+ *                  re-render. Use this after any phase action -- ctx.reload()
+ *                  re-reads over REST, which lags the write and makes the
+ *                  action look like it didn't take.
  *   ctx.goTo(id)   switch tabs
  */
 (function (global) {
@@ -226,7 +230,65 @@
     cardCache = {};
     WFRest.invalidateBoardCards(ctx.board.id);
     WFPricing.invalidate(ctx.board.id);
-    return renderActive();
+    // ctx.roster was previously read once at startup, so saving a roster change
+    // had no visible effect (and isManager stayed stale) until a full reopen.
+    return WFRoster.getRoster(t).then(function (r) {
+      if (r) {
+        ctx.roster = r;
+        ctx.isManager = (r.managers || []).indexOf(ctx.member.username) !== -1 ||
+                        WFStage.isManager(ctx.member.username);
+      }
+    }).catch(function () { /* keep whatever we had */ })
+      .then(function () { return renderActive(); });
+  }
+
+  /** Copy own properties of src onto dst (kept ES5-plain like the rest of this file). */
+  function assignInto(dst, src) {
+    Object.keys(src).forEach(function (k) { dst[k] = src[k]; });
+    return dst;
+  }
+
+  /** Mutate the already-resolved card objects in every cached list. */
+  function patchCachedCard(cardId, patch) {
+    return Promise.all(Object.keys(cardCache).map(function (k) {
+      return cardCache[k].then(function (list) {
+        (list || []).forEach(function (c) { if (c.id === cardId) assignInto(c, patch); });
+      }).catch(function () { /* a failed list will be refetched anyway */ });
+    }));
+  }
+
+  /**
+   * Refresh one card after an action, WITHOUT re-fetching the board.
+   *
+   * This is the fix for actions appearing to "bounce". Phase state is written
+   * with t.set(), which goes through Trello's SDK, but getBoardCardsFull() reads
+   * it back over the REST API -- and that read lags the write. Re-rendering off
+   * a fresh REST fetch therefore repainted the OLD state and the row snapped
+   * back, even though the write had succeeded.
+   *
+   * t.get() reads the same store t.set() wrote to, so it is immediately
+   * consistent. We read the card's phase state back through the SDK, patch it
+   * into the cached list in place, and re-render off that.
+   *
+   * `extra` is for facts the caller already knows that the SDK can't tell us --
+   * chiefly idList after an approve moves the card to the next phase.
+   */
+  function syncCard(cardId, extra) {
+    return Promise.all([
+      WFPhase.getPhaseWork(t, cardId).catch(function () { return undefined; }),
+      t.get(cardId, "shared", "phaseLog", []).catch(function () { return undefined; })
+    ]).then(function (r) {
+      var patch = {};
+      if (r[0] !== undefined) patch.phaseWork = r[0];
+      if (r[1] !== undefined) patch.phaseLog = r[1];
+      if (extra) assignInto(patch, extra);
+      return patchCachedCard(cardId, patch);
+    }).then(function () {
+      // Drop the REST cache so the next *full* load can't serve a stale copy
+      // from inside its 2-minute window.
+      WFRest.invalidateBoardCards(ctx.board.id);
+      return renderActive();
+    });
   }
 
   /* ------------------------------------------------------------------- tabs */
@@ -328,6 +390,7 @@
                      WFStage.isManager(member.username),
           cards: cards,
           reload: reload,
+          syncCard: syncCard,
           goTo: goTo
         };
 
