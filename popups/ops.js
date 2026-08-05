@@ -281,17 +281,30 @@
     return cardCache[key];
   }
 
+  /**
+   * One place that decides someone's role, so it can't drift.
+   * WFStage.isManager reads config.js directly -- keep honouring it so the
+   * hardcoded managers still have rights on a board whose roster was never saved.
+   */
+  function resolveRole(roster, username) {
+    var role = WFRoster.roleOf(roster, username);
+    if (role !== "manager" && WFStage.isManager(username)) role = "manager";
+    return role;
+  }
+
   function reload() {
     cardCache = {};
     WFRest.invalidateBoardCards(ctx.board.id);
     WFPricing.invalidate(ctx.board.id);
-    // ctx.roster was previously read once at startup, so saving a roster change
-    // had no visible effect (and isManager stayed stale) until a full reopen.
+    // Re-read the roster on every reload so a role or responsibility change
+    // takes effect immediately -- tabs appear/disappear on the spot rather than
+    // waiting for the window to be reopened. Previously ctx.roster was read once
+    // at startup, so edits had no visible effect at all.
     return WFRoster.getRoster(t).then(function (r) {
       if (r) {
         ctx.roster = r;
-        ctx.isManager = (r.managers || []).indexOf(ctx.member.username) !== -1 ||
-                        WFStage.isManager(ctx.member.username);
+        ctx.role = resolveRole(r, ctx.member.username);
+        ctx.isManager = ctx.role === "manager";
       }
     }).catch(function () { /* keep whatever we had */ })
       .then(function () { return renderActive(); });
@@ -350,8 +363,20 @@
 
   function tab(def) { tabs.push(def); }
 
+  /**
+   * Tabs declare who they're for with `roles: ["manager", "office"]`.
+   * Anything undeclared is visible to everyone, so a worker's default view is
+   * their own queue and nothing financial. `managerOnly` still works.
+   *
+   * This is relevance, not security -- it decides what the window shows, and a
+   * determined person can still read the underlying card through Trello itself.
+   */
   function visibleTabs() {
-    return tabs.filter(function (d) { return !d.managerOnly || ctx.isManager; });
+    return tabs.filter(function (d) {
+      if (d.roles) return d.roles.indexOf(ctx.role) !== -1;
+      if (d.managerOnly) return ctx.isManager;
+      return true;
+    });
   }
 
   function paintTabs() {
@@ -441,8 +466,8 @@
           member: member,
           boardCfg: WFStage.getBoardConfig(board.id),
           roster: roster,
-          isManager: roster.managers.indexOf(member.username) !== -1 ||
-                     WFStage.isManager(member.username),
+          role: resolveRole(roster, member.username),
+          isManager: resolveRole(roster, member.username) === "manager",
           cards: cards,
           reload: reload,
           syncCard: syncCard,
