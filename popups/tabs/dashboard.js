@@ -32,7 +32,7 @@
       if (stage.isWorkPhase) s.inShop++;
       if (color === "red") { s.late++; byStage[k].hot = true; }
 
-      var work = card.phaseWork;
+      var work = O.activeWork(card);
       if (work) {
         if (work.pendingApproval) s.pendingApproval++;
         if (WFPhase.isRunning(work)) { s.running++; s.minutesToday += WFPhase.totalMinutes(work) || 0; }
@@ -96,15 +96,15 @@
   }
 
   function attentionRow(ctx, a) {
-    var who = a.card.phaseWork && a.card.phaseWork.claimedBy
-      ? O.displayName(a.card.phaseWork.claimedBy) : "nobody yet";
+    var aw = O.activeWork(a.card);
+    var who = aw && aw.claimedBy ? O.displayName(aw.claimedBy) : "nobody yet";
     var sub = a.reason === "thin" && a.marginPct != null
       ? "margin " + Math.round(a.marginPct * 10) / 10 + "%"
       : who;
     var badge = a.reason === "late"
       ? O.tag(O.elapsedPhrase(a.days) + " late", "late")
       : a.reason === "thin" ? O.tag("thin margin", "late") : O.tag("getting close", "warn");
-    var unclaimed = !(a.card.phaseWork && a.card.phaseWork.claimedBy);
+    var unclaimed = !(aw && aw.claimedBy);
 
     var row = O.el("div.wf-row", { style: "grid-template-columns:1.6fr 150px 130px auto" },
       O.el("div", null,

@@ -13,7 +13,7 @@
   }
 
   function pendingCard(ctx, x) {
-    var card = x.card, w = card.phaseWork;
+    var card = x.card, w = O.activeWork(card) || {};
     var next = nextStageName(ctx, card);
     var mins = WFPhase.totalMinutes(w);
     var sla = x.stage && x.stage.slaDays ? x.stage.slaDays * 1440 : null;
@@ -80,9 +80,13 @@
           return { card: c, stage: cfg ? cfg.stages.filter(function (s) { return s.listId === c.idList; })[0] : null };
         });
 
-        var pending = withStage.filter(function (x) { return x.card.phaseWork && x.card.phaseWork.pendingApproval; });
+        var pending = withStage.filter(function (x) {
+          var w = O.activeWork(x.card);
+          return w && w.pendingApproval;
+        });
         var unclaimed = withStage.filter(function (x) {
-          return x.stage && x.stage.isWorkPhase && (!x.card.phaseWork || !x.card.phaseWork.claimedBy);
+          var w = O.activeWork(x.card);
+          return x.stage && x.stage.isWorkPhase && (!w || !w.claimedBy);
         });
         badge = pending.length;
 

@@ -24,8 +24,36 @@
     return node;
   }
 
+  /* Hand off a job you've already claimed. Assign() takes the whole member so
+     claimedBy keeps a fullName. */
+  function reassignRow(ctx, card, stage) {
+    var byUser = {};
+    (ctx.board.members || []).forEach(function (m) { byUser[m.username] = m; });
+    var names = (ctx.roster.phaseSpecialists || {})[stage ? stage.name : ""] || [];
+    var pool = (names.length ? names : Object.keys(byUser))
+      .filter(function (u) { return u !== ctx.member.username; });
+
+    var sel = O.el("select", { style: "width:190px" },
+      O.el("option", { value: "", text: "Hand off to…" }));
+    pool.forEach(function (u) {
+      sel.appendChild(O.el("option", { value: u, text: O.displayName(byUser[u] || { username: u }) }));
+    });
+
+    return O.el("div", { style: "display:flex;align-items:center;gap:10px;margin-top:14px" },
+      sel,
+      O.btn("Hand it over", {
+        busyText: "Handing over…",
+        onClick: function () {
+          if (!sel.value) return;
+          var to = byUser[sel.value] || { username: sel.value };
+          return WFPhase.assign(ctx.t, meta(ctx, card), ctx.member, to)
+            .then(function () { return ctx.syncCard(card.id); });
+        }
+      }));
+  }
+
   function activeCard(ctx, card, stage) {
-    var w = card.phaseWork;
+    var w = O.activeWork(card);
     var pct = WFPhase.percentComplete(w) || 0;
 
     var slider = O.el("input", { type: "range", min: "0", max: "100", step: "5", value: String(pct) });
@@ -61,7 +89,8 @@
                 return WFPhase.complete(ctx.t, meta(ctx, card))
                   .then(function () { return ctx.syncCard(card.id); });
               }
-            })))));
+            })),
+          reassignRow(ctx, card, stage))));
     return p;
   }
 
@@ -118,7 +147,10 @@
         cards.forEach(function (card) {
           var stage = stageOf(ctx, card);
           if (!stage || !stage.isWorkPhase) return;
-          var w = card.phaseWork;
+          // Only work belonging to this card's current phase counts -- see
+          // WFOps.activeWork. Reading phaseWork raw is what made Pause dead on
+          // cards that had been claimed and then moved.
+          var w = O.activeWork(card);
           if (w && w.claimedBy && w.claimedBy.username === me) {
             // assign() puts the assignee in claimedBy with no segments yet, so
             // "handed to me but not started" and "actively mine" both land here.
@@ -157,7 +189,7 @@
             return O.el("div.wf-card.is-review", { style: "grid-template-columns:1.6fr 1fr auto" },
               O.el("div", null,
                 O.el("div.wf-card-t", { text: r[0].name }),
-                O.el("div.wf-card-s", { text: r[1].name + " · " + O.hours(WFPhase.totalMinutes(r[0].phaseWork)) + " logged" })),
+                O.el("div.wf-card-s", { text: r[1].name + " · " + O.hours(WFPhase.totalMinutes(O.activeWork(r[0]))) + " logged" })),
               O.el("div", null, O.tag("Sent for sign-off", "warn")),
               O.el("div.wf-actions", null,
                 O.btn("Undo", {

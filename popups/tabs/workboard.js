@@ -24,7 +24,7 @@
   }
 
   function state(card) {
-    var w = card.phaseWork;
+    var w = O.activeWork(card);
     if (!w || !w.claimedBy) return "open";
     if (w.pendingApproval) return "review";
     // Handed to someone who hasn't tapped Start yet -- distinct from "paused",
@@ -62,7 +62,7 @@
 
   function jobCard(ctx, card, stage) {
     var st = state(card);
-    var w = card.phaseWork || {};
+    var w = O.activeWork(card) || {};
     var meta = metaFor(ctx, card);
     var days = WFStage.daysSince(card.dateLastActivity);
     var late = WFStage.colorForElapsed(stage, days) === "red";
