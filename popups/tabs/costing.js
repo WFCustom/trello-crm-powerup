@@ -147,7 +147,7 @@
   O.tab({
     id: "costing",
     label: "Job costing",
-    managerOnly: true,
+    roles: ["manager"],   // financials -- never shown to workers or office
     render: function (ctx) {
       // filter:'all' so finished and archived jobs count -- costing is a
       // look-back question, not a "what's open" one.

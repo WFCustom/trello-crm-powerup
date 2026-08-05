@@ -141,7 +141,7 @@
   O.tab({
     id: "performance",
     label: "Performance",
-    managerOnly: true,
+    roles: ["manager"],   // per-person pay and margins
     render: function (ctx) {
       return Promise.all([
         ctx.cards({ filter: "all" }),

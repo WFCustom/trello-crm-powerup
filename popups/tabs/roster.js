@@ -8,15 +8,55 @@
 
   function label(m) { return (m.fullName || m.username); }
 
-  function personRow(ctx, m, rate, isManager, phases) {
-    return O.el("div.wf-card" + (isManager ? ".is-running" : ""), {
-      style: "grid-template-columns:1.4fr 1.4fr 160px auto"
+  /* What each role gets, spelled out in the UI so it isn't guesswork.
+     Roles are editable here at any time and take effect on the next render --
+     no reopening the window. */
+  var ROLE_NOTE = {
+    manager: "Everything, including costing and per-person figures",
+    office: "Paperwork steps and the work board. No financials",
+    worker: "Own queue only: claim, timer, complete. No financials"
+  };
+
+  function roleControls(ctx, m, role) {
+    var acts = [];
+    if (role !== "manager") {
+      acts.push(O.btn("Make a manager", {
+        small: true, busyText: "…",
+        onClick: function () { return WFRoster.addManager(ctx.t, m.username).then(ctx.reload); }
+      }));
+    } else {
+      acts.push(O.btn("Remove as manager", {
+        small: true, busyText: "…",
+        onClick: function () { return WFRoster.removeManager(ctx.t, m.username).then(ctx.reload); }
+      }));
+    }
+    if (role === "office") {
+      acts.push(O.btn("Not office", {
+        small: true, quiet: true, busyText: "…",
+        onClick: function () { return WFRoster.removeOffice(ctx.t, m.username).then(ctx.reload); }
+      }));
+    } else if (role !== "manager") {
+      acts.push(O.btn("Make office", {
+        small: true, quiet: true, busyText: "…",
+        onClick: function () { return WFRoster.addOffice(ctx.t, m.username).then(ctx.reload); }
+      }));
+    }
+    return acts;
+  }
+
+  function personRow(ctx, m, rate, role, phases) {
+    var edge = role === "manager" ? ".is-running" : (role === "office" ? ".is-review" : "");
+    return O.el("div.wf-card" + edge, {
+      style: "grid-template-columns:1.3fr 1.3fr 150px auto"
     },
       O.el("div", { style: "display:flex;align-items:center;gap:12px" },
         O.el("div.wf-avatar", { style: "background:var(--wf-steel-2)", text: O.initials(label(m)) }),
         O.el("div", null,
           O.el("div.wf-card-t", { text: label(m) }),
-          O.el("div.wf-card-s", { text: "@" + m.username }))),
+          O.el("div.wf-card-s", { text: "@" + m.username }),
+          O.el("div", { style: "margin-top:6px;display:flex;align-items:center;gap:8px" },
+            O.tag(role, role === "manager" ? "solid" : (role === "office" ? "warn" : "quiet")),
+            O.el("span.wf-card-s", { text: ROLE_NOTE[role] || "" })))),
       O.el("div", { style: "display:flex;flex-wrap:wrap;gap:6px" },
         phases.length
           ? phases.map(function (p) { return O.tag(p, "quiet"); })
@@ -24,16 +64,7 @@
       O.el("div", null,
         O.el("div.wf-card-s", { text: "Labor rate" }),
         O.el("div.wf-card-t", { text: rate != null ? "$" + rate + "/hr" : "—" })),
-      O.el("div.wf-actions", null,
-        isManager
-          ? O.btn("Remove as manager", {
-              small: true, busyText: "…",
-              onClick: function () { return WFRoster.removeManager(ctx.t, m.username).then(ctx.reload); }
-            })
-          : O.btn("Make a manager", {
-              small: true, busyText: "…",
-              onClick: function () { return WFRoster.addManager(ctx.t, m.username).then(ctx.reload); }
-            })));
+      O.el("div.wf-actions", { style: "flex-wrap:wrap" }, roleControls(ctx, m, role)));
   }
 
   function phaseBlock(ctx, phase, members) {
@@ -73,7 +104,7 @@
   O.tab({
     id: "roster",
     label: "Roster",
-    managerOnly: true,
+    roles: ["manager"],   // only managers change who can do what
     render: function (ctx) {
       return WFRest.getLiveRatesCardDesc(ctx.t).catch(function () { return null; }).then(function (desc) {
         var rates = desc ? WFMetrics.parseRatesCardDesc(desc) : {};
@@ -101,7 +132,8 @@
             ? "rates synced from QuickBooks" + (syncedAt ? " · " + syncedAt[1].trim() : "")
             : "no QuickBooks rates synced yet");
         people.body(O.el("div.wf-cards", { style: "margin:0" }, members.map(function (m) {
-          return personRow(ctx, m, rates[m.username], managers.indexOf(m.username) !== -1, phasesFor(m.username));
+          return personRow(ctx, m, rates[m.username],
+            WFRoster.roleOf(ctx.roster, m.username), phasesFor(m.username));
         })));
 
         var out = O.el("div", null, head, people);

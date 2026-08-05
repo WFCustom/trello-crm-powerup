@@ -177,6 +177,9 @@
   O.tab({
     id: "workboard",
     label: "Work board",
+    // Everyone-else's-work view: supervisory. Workers get "My jobs" instead,
+    // which shows their own queue plus what's free to claim in their phases.
+    roles: ["manager", "office"],
     render: function (ctx) {
       stopTimers();
       return ctx.cards().then(function (cards) {

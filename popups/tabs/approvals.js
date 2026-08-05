@@ -71,7 +71,7 @@
   O.tab({
     id: "approvals",
     label: "Approvals",
-    managerOnly: true,
+    roles: ["manager"],
     badgeCount: function () { return badge; },
     render: function (ctx) {
       return ctx.cards().then(function (cards) {

@@ -151,7 +151,7 @@
   O.tab({
     id: "dashboard",
     label: "Dashboard",
-    managerOnly: true,
+    roles: ["manager"],   // carries margin figures
     render: function (ctx) {
       return Promise.all([
         ctx.cards(),
