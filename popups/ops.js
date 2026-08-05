@@ -114,6 +114,29 @@
     return String(displayName(person)).split(" ")[0] || "someone";
   }
 
+  /**
+   * The phase work belonging to the card's CURRENT list, or null.
+   *
+   * lib/phase.js intentionally ignores work whose listId doesn't match the
+   * card's list -- work belongs to the phase it was claimed in. The tabs were
+   * reading card.phaseWork raw, so a card claimed and then moved to another
+   * list still rendered as "yours, running" while Pause and Complete silently
+   * did nothing: the action layer correctly saw no active work for that phase.
+   * Reading through here keeps what's shown and what's actionable in agreement.
+   */
+  function activeWork(card) {
+    var w = card && card.phaseWork;
+    if (!w) return null;
+    if (w.listId && card.idList && w.listId !== card.idList) return null;
+    return w;
+  }
+
+  /** True when a card carries work left behind by an earlier phase. */
+  function hasOrphanedWork(card) {
+    var w = card && card.phaseWork;
+    return !!(w && w.listId && card.idList && w.listId !== card.idList);
+  }
+
   function initials(name) {
     return String(name || "?").trim().split(/\s+/).slice(0, 2)
       .map(function (w) { return w[0]; }).join("").toUpperCase();
@@ -494,6 +517,7 @@
     initials: initials, timeOfDay: timeOfDay, elapsedPhrase: elapsedPhrase,
     runningSince: runningSince, isAwaitingStart: isAwaitingStart,
     displayName: displayName, firstName: firstName,
+    activeWork: activeWork, hasOrphanedWork: hasOrphanedWork,
     openCard: openCard,
     get t() { return t; }
   };
