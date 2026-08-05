@@ -99,6 +99,21 @@
     return h + ":" + p(m) + ":" + p(sec);
   }
 
+  /**
+   * People stored on a card may only carry a username -- an assignment made
+   * before we started passing the whole member object writes claimedBy with no
+   * fullName, and calling .split() on that undefined crashed the Work board.
+   * Always go through these two.
+   */
+  function displayName(person) {
+    if (!person) return "someone";
+    return person.fullName || person.username || "someone";
+  }
+
+  function firstName(person) {
+    return String(displayName(person)).split(" ")[0] || "someone";
+  }
+
   function initials(name) {
     return String(name || "?").trim().split(/\s+/).slice(0, 2)
       .map(function (w) { return w[0]; }).join("").toUpperCase();
@@ -198,6 +213,46 @@
 
   /* ------------------------------------------------------------------ cards */
 
+  /**
+   * Correct the phase fields straight from the SDK after a REST board fetch.
+   *
+   * Trello's REST plugin-data is eventually consistent: a card claimed moments
+   * ago can come back from /boards/{id}/cards looking unclaimed. That's what
+   * made state appear to reset after opening a card and coming back -- the
+   * modal reopens, loads fresh over REST, and gets a pre-claim snapshot.
+   *
+   * t.get reads the same store t.set wrote to, so it's authoritative. We only
+   * do this for cards sitting in work phases (37 on this board today), which
+   * keeps it bounded, and only for the live "open" view -- the historical
+   * filter:"all" pass is looking backwards, where REST is perfectly fine.
+   */
+  function overlayPhaseState(list) {
+    var cfg = ctx.boardCfg;
+    if (!cfg || !list || !list.length) return Promise.resolve(list);
+
+    var isWorkList = {};
+    (cfg.stages || []).forEach(function (s) { if (s.isWorkPhase) isWorkList[s.listId] = true; });
+    var targets = list.filter(function (c) { return isWorkList[c.idList]; });
+    if (!targets.length) return Promise.resolve(list);
+
+    var i = 0;
+    function nextBatch() {
+      if (i >= targets.length) return Promise.resolve();
+      var batch = targets.slice(i, i + 10);
+      i += 10;
+      return Promise.all(batch.map(function (c) {
+        return Promise.all([
+          t.get(c.id, "shared", "phaseWork", null).catch(function () { return undefined; }),
+          t.get(c.id, "shared", "phaseLog", []).catch(function () { return undefined; })
+        ]).then(function (r) {
+          if (r[0] !== undefined) c.phaseWork = r[0];
+          if (r[1] !== undefined) c.phaseLog = r[1];
+        });
+      })).then(nextBatch);
+    }
+    return nextBatch().then(function () { return list; });
+  }
+
   function cards(opts) {
     var key = (opts && opts.filter) || "open";
     if (!cardCache[key]) {
@@ -220,7 +275,7 @@
             c.economics.valueFrom = WFPricing.fieldName();
           }
         });
-        return list;
+        return key === "open" ? overlayPhaseState(list) : list;
       });
     }
     return cardCache[key];
@@ -413,6 +468,7 @@
     money: money, moneyShort: moneyShort, hours: hours, clock: clock,
     initials: initials, timeOfDay: timeOfDay, elapsedPhrase: elapsedPhrase,
     runningSince: runningSince, isAwaitingStart: isAwaitingStart,
+    displayName: displayName, firstName: firstName,
     openCard: openCard,
     get t() { return t; }
   };
