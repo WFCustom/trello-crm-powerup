@@ -97,7 +97,7 @@
 
   function attentionRow(ctx, a) {
     var who = a.card.phaseWork && a.card.phaseWork.claimedBy
-      ? a.card.phaseWork.claimedBy.fullName : "nobody yet";
+      ? O.displayName(a.card.phaseWork.claimedBy) : "nobody yet";
     var sub = a.reason === "thin" && a.marginPct != null
       ? "margin " + Math.round(a.marginPct * 10) / 10 + "%"
       : who;

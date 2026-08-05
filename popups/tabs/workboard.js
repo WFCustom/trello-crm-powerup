@@ -37,6 +37,14 @@
     return { id: card.id, idList: card.idList, idBoard: ctx.board.id };
   }
 
+  /* Hand assign() the whole board member, not just a username. Passing
+     { username } alone stored a claimedBy with no fullName, which then crashed
+     every render that wanted a first name. */
+  function memberByUsername(ctx, username) {
+    var hit = (ctx.board.members || []).filter(function (m) { return m.username === username; })[0];
+    return hit || { username: username };
+  }
+
   function assignSelect(ctx, stageName) {
     var names = (ctx.roster.phaseSpecialists || {})[stageName] || [];
     var byUser = {};
@@ -65,8 +73,8 @@
 
     var sub;
     if (st === "open") sub = "waiting " + O.elapsedPhrase(days);
-    else if (st === "assigned") sub = "handed to " + w.claimedBy.fullName.split(" ")[0] + " · not started yet";
-    else if (st === "review") sub = w.claimedBy.fullName.split(" ")[0] + " finished in " + O.hours(WFPhase.totalMinutes(w));
+    else if (st === "assigned") sub = "handed to " + O.firstName(w.claimedBy) + " · not started yet";
+    else if (st === "review") sub = O.firstName(w.claimedBy) + " finished in " + O.hours(WFPhase.totalMinutes(w));
     else sub = "started " + (O.runningSince(w) ? O.timeOfDay(O.runningSince(w)) : "earlier") +
       " · " + (WFPhase.percentComplete(w) || 0) + "% done";
 
@@ -79,7 +87,7 @@
     else if (st === "assigned") status.appendChild(O.tag("Not started yet", "warn"));
     else if (st === "review") status.appendChild(O.tag("Needs your OK", "warn"));
     else {
-      status.appendChild(O.tag(w.claimedBy.fullName.split(" ")[0] +
+      status.appendChild(O.tag(O.firstName(w.claimedBy) +
         (st === "running" ? " is on it" : " paused it"), st === "running" ? "go" : "quiet"));
       status.appendChild(liveTimer(w));
     }
@@ -93,7 +101,7 @@
         busyText: "Assigning…",
         onClick: function () {
           if (!sel.value) return;
-          return WFPhase.assign(ctx.t, meta, ctx.member, { username: sel.value })
+          return WFPhase.assign(ctx.t, meta, ctx.member, memberByUsername(ctx, sel.value))
             .then(function () { return ctx.syncCard(card.id); });
         }
       }));
@@ -111,7 +119,7 @@
         busyText: "Reassigning…",
         onClick: function () {
           if (!resel.value) return;
-          return WFPhase.assign(ctx.t, meta, ctx.member, { username: resel.value })
+          return WFPhase.assign(ctx.t, meta, ctx.member, memberByUsername(ctx, resel.value))
             .then(function () { return ctx.syncCard(card.id); });
         }
       }));
@@ -160,7 +168,7 @@
             .then(function () { return ctx.syncCard(card.id); });
         }
       }));
-      if (!mine) actions.firstChild.title = "Claimed by " + w.claimedBy.fullName;
+      if (!mine) actions.firstChild.title = "Claimed by " + O.displayName(w.claimedBy);
     }
     node.appendChild(actions);
     return node;

@@ -25,7 +25,7 @@
       O.el("div", null,
         O.el("div.wf-card-t", { text: card.name }),
         O.el("div.wf-card-s", {
-          text: (x.stage ? x.stage.name : "—") + " · " + w.claimedBy.fullName +
+          text: (x.stage ? x.stage.name : "—") + " · " + O.displayName(w.claimedBy) +
                 " · " + O.hours(mins) + (next ? " · next up: " + next : "")
         })),
       O.el("div", { style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" },
