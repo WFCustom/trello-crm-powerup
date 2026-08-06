@@ -29,6 +29,17 @@
   var ctx = null;
   var cardCache = {};
 
+  /**
+   * Sandbox mode -- a manager temporarily acts as someone else so they can
+   * exercise a worker's or a checker's side of a flow without a second login.
+   *
+   * It is deliberately in-memory only: nothing is persisted, closing the window
+   * drops it. Writes made while acting genuinely record the acted-as person,
+   * because the point is to test the real flow -- so the banner is loud.
+   */
+  var realMember = null;
+  var actingAs = null;
+
   /* ----------------------------------------------------------- dom helpers */
 
   function esc(s) {
@@ -557,6 +568,64 @@
     return renderActive();
   }
 
+  /** Manager-only control for stepping into someone else's shoes. */
+  function paintSandbox() {
+    var slot = document.getElementById("syncNote");
+    if (!slot) return;
+    slot.innerHTML = "";
+    // Gate on the REAL person, so you can't act as a worker and get stuck there.
+    if (!realMember || resolveRole(ctx.roster, realMember.username) !== "manager") return;
+
+    var sel = el("select", {
+      style: "width:auto;padding:4px 8px;font-size:12.5px;border-radius:8px"
+    }, el("option", { value: "", text: "Acting as myself" }));
+    (ctx.board.members || []).forEach(function (m) {
+      if (m.username === realMember.username) return;
+      var o = el("option", { value: m.username, text: "Act as " + displayName(m) });
+      if (actingAs && actingAs.username === m.username) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener("change", function () { setActingAs(sel.value); });
+    slot.appendChild(sel);
+  }
+
+  function paintSandboxBanner() {
+    var existing = document.getElementById("wfSandboxBanner");
+    if (existing) existing.parentNode.removeChild(existing);
+    if (!actingAs) return;
+    var shell = document.querySelector(".wf-shell");
+    if (!shell) return;
+    var bar = el("div#wfSandboxBanner", {
+      style: "background:var(--wf-ember);color:#fff;padding:9px 24px;font-size:13.5px;" +
+             "font-weight:600;display:flex;align-items:center;gap:14px"
+    },
+      el("span", { text: "Sandbox — you are acting as " + displayName(actingAs) +
+                         ". Anything you do is recorded against them." }),
+      btn("Stop", { small: true, quiet: true, onClick: function () { setActingAs(""); } }));
+    bar.lastChild.style.color = "#fff";
+    bar.lastChild.style.borderColor = "rgba(255,255,255,.5)";
+    shell.insertBefore(bar, shell.firstChild.nextSibling);
+  }
+
+  function setActingAs(username) {
+    var m = (ctx.board.members || []).filter(function (x) { return x.username === username; })[0];
+    actingAs = m || null;
+    ctx.member = actingAs || realMember;
+    ctx.role = resolveRole(ctx.roster, ctx.member.username);
+    ctx.isManager = ctx.role === "manager";
+    ctx.actingAs = actingAs;
+    ctx.realMember = realMember;
+    document.getElementById("meName").textContent = firstName(ctx.member);
+    document.getElementById("meInitials").textContent = initials(displayName(ctx.member));
+    paintSandbox();
+    paintSandboxBanner();
+    // Role may have changed which tabs exist, so fall back to a visible one.
+    var still = visibleTabs().filter(function (d) { return d.id === active; })[0];
+    if (!still) active = (visibleTabs()[0] || {}).id;
+    paintTabs();
+    return renderActive();
+  }
+
   function renderActive() {
     var view = document.getElementById("view");
     var def = visibleTabs().filter(function (d) { return d.id === active; })[0] || visibleTabs()[0];
@@ -629,8 +698,13 @@
           goTo: goTo
         };
 
+        realMember = member;
+        ctx.realMember = member;
+        ctx.actingAs = null;
+
         var wanted = (global.location.hash || "").replace("#", "");
         active = wanted || (ctx.isManager ? "dashboard" : "myjobs");
+        paintSandbox();
         paintTabs();
         return renderActive();
       });
