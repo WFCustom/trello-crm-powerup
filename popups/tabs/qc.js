@@ -232,7 +232,7 @@
           if (!rec || rec.status === "passed") return;
           var stage = stageOf(ctx, card);
           var owner = WFQC.isOwner(rec, me);
-          var reviewer = WFQC.canReview(rec, me) && !owner;
+          var reviewer = WFQC.canReview(rec, me, ctx.isManager) && !owner;
 
           if (rec.status === S.CHECK && reviewer) toCheck.push([card, stage, rec, "check"]);
           else if (rec.status === S.CORRECTION && owner) toCorrect.push([card, stage, rec, "correct"]);
@@ -263,6 +263,42 @@
         section("Sent back to you", toCorrect, "Nothing has come back to you.");
         section("Re-check after correction", toVerify, null);
         section("Everything else in QC", watching, null);
+
+        // Signed-off checks stay readable. This is the record people will want
+        // to point at later -- who checked, what failed, what was done about it.
+        var done = [];
+        cards.forEach(function (card) {
+          var rec = WFQC.anyRecord(card);
+          if (!rec || rec.status !== "passed") return;
+          done.push([card, stageOf(ctx, card), rec]);
+        });
+        done.sort(function (a, b) {
+          return String(b[2].passedAt || "").localeCompare(String(a[2].passedAt || ""));
+        });
+
+        if (done.length) {
+          out.appendChild(O.el("div.wf-group-h", { style: "margin-top:28px" },
+            O.el("div.wf-group-t", { text: "Signed off" }),
+            O.el("span.wf-group-n", { text: String(done.length) })));
+          out.appendChild(O.el("div.wf-cards", null, done.slice(0, 25).map(function (r) {
+            var card = r[0], rec = r[2];
+            var rounds = (rec.rounds || []).length;
+            return O.el("div.wf-card.is-running", { style: "grid-template-columns:1.6fr 1fr auto" },
+              O.el("div", null,
+                O.el("div.wf-card-t", { text: card.name }),
+                O.el("div.wf-card-s", {
+                  text: (rec.phase || "—") + " · work by " + O.displayName(rec.requestedBy) +
+                        " · passed by " + O.displayName(rec.passedBy) +
+                        (rounds > 1 ? " after " + rounds + " rounds" : "")
+                }),
+                history(rec)),
+              O.el("div", null, O.tag(rounds > 1 ? "needed correction" : "passed first time",
+                rounds > 1 ? "warn" : "go")),
+              O.el("div.wf-actions", null, O.btn("Open card", {
+                small: true, quiet: true, onClick: function () { O.openCard(card); }
+              })));
+          })));
+        }
 
         return out;
       });

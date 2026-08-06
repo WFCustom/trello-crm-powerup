@@ -93,14 +93,33 @@
     var items = (templates[phase.name] || []).slice();
     var listWrap = O.el("div");
 
+    /* Items are editable in place -- reword one without deleting and retyping.
+       Reordering matters too: a checker works the list top to bottom. */
     function paint() {
       listWrap.innerHTML = "";
       if (!items.length) {
         listWrap.appendChild(O.el("div.hint", { text: "No checklist yet — the checker just confirms the work is right." }));
       }
       items.forEach(function (text, i) {
-        listWrap.appendChild(O.el("div", { style: "display:flex;align-items:center;gap:8px;padding:5px 0" },
-          O.el("div", { style: "flex:1;font-size:13.5px", text: (i + 1) + ". " + text }),
+        var field = O.el("input", { type: "text", value: text, style: "flex:1" });
+        field.addEventListener("input", function () { items[i] = field.value; });
+        listWrap.appendChild(O.el("div", { style: "display:flex;align-items:center;gap:6px;padding:4px 0" },
+          O.el("span.wf-card-s", { style: "width:18px;text-align:right", text: (i + 1) + "." }),
+          field,
+          O.btn("↑", {
+            small: true, quiet: true,
+            onClick: function () {
+              if (i === 0) return;
+              var tmp = items[i - 1]; items[i - 1] = items[i]; items[i] = tmp; paint();
+            }
+          }),
+          O.btn("↓", {
+            small: true, quiet: true,
+            onClick: function () {
+              if (i === items.length - 1) return;
+              var tmp = items[i + 1]; items[i + 1] = items[i]; items[i] = tmp; paint();
+            }
+          }),
           O.btn("Remove", {
             small: true, quiet: true,
             onClick: function () { items.splice(i, 1); paint(); }
