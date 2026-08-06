@@ -227,6 +227,57 @@
 
   function empty(text) { return el("div.wf-empty", { text: text }); }
 
+  /**
+   * In-window dialog. We're already a fullscreen page, so this is our own
+   * overlay rather than t.popup() -- which is narrow, fixed-width, and would
+   * fight the layout. Escape or the backdrop cancels.
+   *
+   * dialog({ title, note, content, buttons:[{label, primary, quiet, onClick}] })
+   * A button's onClick may return a promise; the dialog closes when it settles.
+   */
+  function dialog(opts) {
+    opts = opts || {};
+    var backdrop = el("div", {
+      style: "position:fixed;inset:0;background:rgba(20,41,61,.45);z-index:9999;" +
+             "display:flex;align-items:center;justify-content:center;padding:24px"
+    });
+    var box = el("div", {
+      style: "background:#fff;border-radius:var(--wf-r-card);box-shadow:var(--wf-shadow-lift);" +
+             "max-width:520px;width:100%;padding:26px 28px;max-height:80vh;overflow:auto"
+    },
+      el("div.wf-panel-t", { text: opts.title || "" }),
+      opts.note ? el("div.muted", { style: "margin-top:4px", text: opts.note }) : null,
+      opts.content ? el("div", { style: "margin-top:18px" }, opts.content) : null);
+
+    function close() {
+      document.removeEventListener("keydown", onKey, true);
+      if (backdrop.parentNode) backdrop.parentNode.removeChild(backdrop);
+    }
+    function onKey(e) { if (e.key === "Escape") { e.stopPropagation(); close(); } }
+
+    var row = el("div.wf-actions", { style: "margin-top:22px" });
+    (opts.buttons || []).forEach(function (b) {
+      row.appendChild(btn(b.label, {
+        primary: b.primary, quiet: b.quiet, danger: b.danger,
+        busyText: b.busyText,
+        onClick: function () {
+          var r = b.onClick ? b.onClick() : undefined;
+          if (r && r.then) return r.then(close, function (e) { close(); throw e; });
+          close();
+          return r;
+        }
+      }));
+    });
+    row.appendChild(btn("Cancel", { quiet: true, onClick: close }));
+    box.appendChild(row);
+
+    backdrop.appendChild(box);
+    backdrop.addEventListener("click", function (e) { if (e.target === backdrop) close(); });
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(backdrop);
+    return { close: close };
+  }
+
   function openCard(card) {
     try {
       var p = t.showCard(card.id);
@@ -266,10 +317,13 @@
       return Promise.all(batch.map(function (c) {
         return Promise.all([
           t.get(c.id, "shared", "phaseWork", null).catch(function () { return undefined; }),
-          t.get(c.id, "shared", "phaseLog", []).catch(function () { return undefined; })
+          t.get(c.id, "shared", "phaseLog", []).catch(function () { return undefined; }),
+          // qcRequest isn't part of getBoardCardsFull, so it only ever arrives here.
+          t.get(c.id, "shared", WFQC.KEY, null).catch(function () { return undefined; })
         ]).then(function (r) {
           if (r[0] !== undefined) c.phaseWork = r[0];
           if (r[1] !== undefined) c.phaseLog = r[1];
+          if (r[2] !== undefined) c.qcRequest = r[2];
         });
       })).then(nextBatch);
     }
@@ -367,11 +421,13 @@
   function syncCard(cardId, extra) {
     return Promise.all([
       WFPhase.getPhaseWork(t, cardId).catch(function () { return undefined; }),
-      t.get(cardId, "shared", "phaseLog", []).catch(function () { return undefined; })
+      t.get(cardId, "shared", "phaseLog", []).catch(function () { return undefined; }),
+      t.get(cardId, "shared", WFQC.KEY, null).catch(function () { return undefined; })
     ]).then(function (r) {
       var patch = {};
       if (r[0] !== undefined) patch.phaseWork = r[0];
       if (r[1] !== undefined) patch.phaseLog = r[1];
+      if (r[2] !== undefined) patch.qcRequest = r[2];
       if (extra) assignInto(patch, extra);
       return patchCachedCard(cardId, patch);
     }).then(function () {
@@ -512,7 +568,7 @@
   global.WFOps = {
     start: start, tab: tab, goTo: goTo, reload: reload,
     el: el, frag: frag, esc: esc,
-    panel: panel, stat: stat, tag: tag, btn: btn, empty: empty,
+    panel: panel, stat: stat, tag: tag, btn: btn, empty: empty, dialog: dialog,
     money: money, moneyShort: moneyShort, hours: hours, clock: clock,
     initials: initials, timeOfDay: timeOfDay, elapsedPhrase: elapsedPhrase,
     runningSince: runningSince, isAwaitingStart: isAwaitingStart,
