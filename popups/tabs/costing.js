@@ -19,6 +19,52 @@
 
   function pct(n) { return n == null ? "—" : (Math.round(n * 10) / 10) + "%"; }
 
+  var timeframe = "all";   // survives tab switches within a session
+
+  function timeframeBar(ctx) {
+    var row = O.el("div", { style: "display:flex;gap:6px;flex-wrap:wrap;margin-bottom:20px" });
+    WFCosting.TIMEFRAMES.forEach(function (tf) {
+      var on = tf.key === timeframe;
+      var b = O.btn(tf.label, {
+        small: true, primary: on, quiet: !on,
+        onClick: function () { timeframe = tf.key; return ctx.reload(); }
+      });
+      row.appendChild(b);
+    });
+    row.appendChild(O.el("div.wf-card-s", { style: "margin-left:auto;align-self:center",
+      text: "measured from when the job entered CAD" }));
+    return row;
+  }
+
+  /* A pie needs a visible canvas before Chart.js can size it, so build after
+     the node is in the document. */
+  function pie(title, slices) {
+    var total = slices.reduce(function (a, s) { return a + s.value; }, 0);
+    var panel = O.panel(title, total ? O.money(total) + " total" : "nothing to show yet");
+    if (!total) return panel.body(O.el("div.muted", { text: "No figures entered for this period." }));
+    var box = O.el("div.chart-box", { style: "height:240px" });
+    var canvas = O.el("canvas");
+    box.appendChild(canvas);
+    panel.body(box);
+    setTimeout(function () {
+      if (!canvas.isConnected || typeof Chart === "undefined") return;
+      new Chart(canvas.getContext("2d"), {
+        type: "doughnut",
+        data: {
+          labels: slices.map(function (s) { return s.label; }),
+          datasets: [{ data: slices.map(function (s) { return Math.round(s.value); }),
+                       backgroundColor: slices.map(function (s) { return s.color; }),
+                       borderWidth: 0 }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, cutout: "58%",
+          plugins: { legend: { position: "right", labels: { boxWidth: 12, font: { size: 12 } } } }
+        }
+      });
+    }, 0);
+    return panel;
+  }
+
   function reworkPanel(t, origins) {
     var lost = t.marginPointsLostToRework;
     var panel = O.panel("What rework is costing you",
@@ -89,6 +135,55 @@
     return panel.body(table);
   }
 
+  /* Type real costs against a job and watch the margin move. Saved to the
+     card, so it follows the job rather than living in a spreadsheet. */
+  function openActuals(ctx, row) {
+    function field(label, val) {
+      var i = O.el("input", { type: "number", min: "0", step: "1", value: val ? String(val) : "" });
+      return { label: label, input: i,
+        node: O.el("div", { style: "margin-bottom:12px" }, O.el("label", { text: label }), i) };
+    }
+    var mats = field("Materials ($)", row.materials);
+    var cons = field("Consumables ($)", row.consumables);
+    var other = field("Other ($)", row.otherCost);
+    var live = O.el("div.wf-callout", { style: "margin-top:4px" },
+      O.el("div.wf-callout-k", { text: "Margin as you type" }),
+      O.el("div.wf-callout-v", { text: "—" }));
+
+    function recalc() {
+      var entered = (Number(mats.input.value) || 0) + (Number(cons.input.value) || 0) +
+                    (Number(other.input.value) || 0);
+      var cost = row.productionCost + row.overhead + row.rework.cost + entered;
+      var m = row.price - cost;
+      live.lastChild.textContent = row.price
+        ? O.money(m) + "  (" + pct((m / row.price) * 100) + ")"
+        : "set a price first";
+    }
+    [mats, cons, other].forEach(function (f) { f.input.addEventListener("input", recalc); });
+    recalc();
+
+    O.dialog({
+      title: "Actual costs",
+      note: row.name + " · " + O.money(row.price) + " booked · labour " +
+            O.money(row.productionCost + row.rework.cost) + " from logged time",
+      content: O.el("div", null, mats.node, cons.node, other.node, live),
+      buttons: [{
+        label: "Save", primary: true, busyText: "Saving…",
+        onClick: function () {
+          return ctx.t.get(row.id, "shared", "economics", null).then(function (econ) {
+            econ = econ || {};
+            econ.actuals = {
+              materials: Number(mats.input.value) || 0,
+              consumables: Number(cons.input.value) || 0,
+              other: Number(other.input.value) || 0
+            };
+            return ctx.t.set(row.id, "shared", "economics", econ);
+          }).then(function () { return ctx.reload(); });
+        }
+      }]
+    });
+  }
+
   function jobTable(ctx, rows) {
     var priced = rows.filter(function (r) { return r.priced; })
       .sort(function (a, b) { return (a.marginPct == null ? 999 : a.marginPct) - (b.marginPct == null ? 999 : b.marginPct); });
@@ -130,10 +225,15 @@
           style: hurt ? "color:var(--wf-ink-go)" : "color:var(--wf-faint)",
           text: hurt ? pct(r.marginPctNoRework) : "—"
         }),
-        O.el("td", null, O.btn("Open", {
-          small: true, quiet: true,
-          onClick: function () { O.openCard({ id: r.id, shortUrl: r.url }); }
-        }))));
+        O.el("td", null, O.el("div", { style: "display:flex;gap:6px;justify-content:flex-end" },
+          O.btn("Costs", {
+            small: true,
+            onClick: function () { openActuals(ctx, r); }
+          }),
+          O.btn("Open", {
+            small: true, quiet: true,
+            onClick: function () { O.openCard({ id: r.id, shortUrl: r.url }); }
+          })))));
     });
     table.appendChild(body);
     panel.body(table);
@@ -152,7 +252,10 @@
       // filter:'all' so finished and archived jobs count -- costing is a
       // look-back question, not a "what's open" one.
       return Promise.all([ctx.cards({ filter: "all" }), loadRates(ctx)]).then(function (loaded) {
-        var cards = loaded[0], rates = loaded[1];
+        var allCards = loaded[0], rates = loaded[1];
+        var cards = allCards.filter(function (c) {
+          return WFCosting.withinTimeframe(c, timeframe);
+        });
         var rows = WFCosting.buildJobRows(cards, ctx.boardCfg, rates);
         if (!rows.length) {
           return O.empty("Nothing to cost yet. Jobs need a price in $Value, or logged phase time.");
@@ -163,7 +266,9 @@
         var head = O.el("div.wf-pagehead", null,
           O.el("div.wf-h1", { text: "Job costing" }),
           O.el("div.wf-sub", {
-            text: t.pricedJobs + " priced of " + t.jobs + " jobs · labor from logged time"
+            text: t.pricedJobs + " priced of " + t.jobs + " jobs · " +
+                  (WFCosting.TIMEFRAMES.filter(function (x) { return x.key === timeframe; })[0] || {}).label +
+                  " · labour from logged time"
           }),
           O.btn("Refresh", { quiet: true, busyText: "Refreshing…", onClick: ctx.reload }));
         head.lastChild.classList.add("wf-spacer");
@@ -190,7 +295,23 @@
               O.el("div.muted", { text: notes.join(" ") }))
           : null;
 
-        return O.el("div", null, head, stats,
+        var costPie = pie("Where the money goes", [
+          { label: "Labour", value: t.productionCost, color: "#1f4e79" },
+          { label: "Materials", value: t.materials, color: "#4d7ba6" },
+          { label: "Consumables", value: t.consumables, color: "#7ea3c4" },
+          { label: "Overhead", value: t.overhead, color: "#d98324" },
+          { label: "Other", value: t.otherCost, color: "#8b97a3" },
+          { label: "Rework", value: t.reworkCost, color: "#c8471c" }
+        ].filter(function (s2) { return s2.value > 0; }));
+
+        var revPie = pie("Revenue by category",
+          Object.keys(t.byCategory).map(function (n, i) {
+            return { label: n, value: t.byCategory[n].allocated,
+                     color: ["#1f4e79", "#b07d2b", "#7a5ea8", "#1f6f4a"][i % 4] };
+          }).filter(function (s2) { return s2.value > 0; }));
+
+        return O.el("div", null, head, timeframeBar(ctx), stats,
+          O.el("div.wf-panels.halves", null, costPie, revPie),
           O.el("div.wf-panels.split", null, reworkPanel(t, origins), categoryPanel(t)),
           jobTable(ctx, rows), caveat);
       });
