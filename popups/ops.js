@@ -137,6 +137,57 @@
     return !!(w && w.listId && card.idList && w.listId !== card.idList);
   }
 
+  /**
+   * The board has four separate Install lists (plus "Install (Tuesday)") that
+   * are all the same job as far as the shop is concerned. Everywhere we talk
+   * about a *phase* -- the work board, the roster, who specialises in what --
+   * they should read as one Install.
+   *
+   * Rule: a phase's identity is its name with any parenthetical qualifier
+   * stripped, so "Install (Tuesday)" and "Install" are the same phase, while
+   * "Sandblast / Powder Coat" and "Print CAD" are untouched. The underlying
+   * lists stay exactly as they are on the board -- this only changes how they
+   * are grouped and labelled.
+   */
+  function phaseKey(name) {
+    return String(name || "").replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  /** Work phases, de-duplicated by name, each carrying all of its lists. */
+  function workPhases(boardCfg) {
+    if (!boardCfg) return [];
+    var byKey = {};
+    (boardCfg.stages || []).forEach(function (s) {
+      if (!s.isWorkPhase) return;
+      var key = phaseKey(s.name);
+      if (!byKey[key]) {
+        byKey[key] = {
+          name: key, order: s.order, listIds: [], slaDays: s.slaDays,
+          isException: !!s.isException, isWorkPhase: true, primaryListId: null,
+          listId: s.listId          // first list, for code that wants a single id
+        };
+      }
+      var p = byKey[key];
+      p.listIds.push(s.listId);
+      if (s.order < p.order) p.order = s.order;
+      if (s.isPrimaryTarget) p.primaryListId = s.listId;
+      if (s.isException) p.isException = true;
+      // Keep the tightest allowance across the merged lists.
+      if (s.slaDays != null && (p.slaDays == null || s.slaDays < p.slaDays)) p.slaDays = s.slaDays;
+    });
+    return Object.keys(byKey).map(function (k) { return byKey[k]; })
+      .sort(function (a, b) { return a.order - b.order; });
+  }
+
+  /** The consolidated phase a card currently sits in, or null. */
+  function phaseForCard(boardCfg, card) {
+    var all = workPhases(boardCfg);
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].listIds.indexOf(card.idList) !== -1) return all[i];
+    }
+    return null;
+  }
+
   function initials(name) {
     return String(name || "?").trim().split(/\s+/).slice(0, 2)
       .map(function (w) { return w[0]; }).join("").toUpperCase();
@@ -574,6 +625,7 @@
     runningSince: runningSince, isAwaitingStart: isAwaitingStart,
     displayName: displayName, firstName: firstName,
     activeWork: activeWork, hasOrphanedWork: hasOrphanedWork,
+    phaseKey: phaseKey, workPhases: workPhases, phaseForCard: phaseForCard,
     openCard: openCard,
     get t() { return t; }
   };
