@@ -52,6 +52,45 @@
       }));
   }
 
+  /**
+   * Finishing a phase asks who should check the work. Either name a peer or
+   * release it to the pool for anyone qualified to pick up. Their sign-off is
+   * the approval -- there's no second manager gate on shop phases.
+   */
+  function openQcChooser(ctx, card, stage) {
+    var byUser = {};
+    (ctx.board.members || []).forEach(function (m) { byUser[m.username] = m; });
+    var specialists = (ctx.roster.phaseSpecialists || {})[stage ? stage.name : ""] || [];
+    var pool = (specialists.length ? specialists : Object.keys(byUser))
+      .filter(function (u) { return u !== ctx.member.username; });   // never check your own work
+
+    var sel = O.el("select", null,
+      O.el("option", { value: "", text: pool.length ? "Anyone can check it (QC pool)" : "No one else on this board yet" }));
+    pool.forEach(function (u) {
+      sel.appendChild(O.el("option", { value: u, text: O.displayName(byUser[u] || { username: u }) }));
+    });
+
+    function finish() {
+      var reviewer = sel.value ? (byUser[sel.value] || { username: sel.value }) : null;
+      return WFPhase.complete(ctx.t, meta(ctx, card))
+        .then(function () { return WFQC.request(ctx.t, meta(ctx, card), ctx.member, reviewer); })
+        .then(function () { return ctx.syncCard(card.id); });
+    }
+
+    O.dialog({
+      title: "Send it for a quality check",
+      note: card.name + (stage ? " · " + stage.name : ""),
+      content: O.el("div", null,
+        O.el("label", { text: "Who should check it?" }),
+        sel,
+        O.el("div.hint", { style: "margin-top:10px",
+          text: "Leave it on the pool and whoever's free can pick it up. Once it passes, the job moves to the next phase." })),
+      buttons: [{
+        label: "Send for QC", primary: true, busyText: "Sending…", onClick: finish
+      }]
+    });
+  }
+
   function activeCard(ctx, card, stage) {
     var w = O.activeWork(card);
     var pct = WFPhase.percentComplete(w) || 0;
@@ -84,11 +123,8 @@
             }),
             O.btn("Open card", { quiet: true, onClick: function () { O.openCard(card); } }),
             O.btn("I'm done with this phase", {
-              primary: true, busyText: "Sending for approval…",
-              onClick: function () {
-                return WFPhase.complete(ctx.t, meta(ctx, card))
-                  .then(function () { return ctx.syncCard(card.id); });
-              }
+              primary: true,
+              onClick: function () { openQcChooser(ctx, card, stage); }
             })),
           reassignRow(ctx, card, stage))));
     return p;
