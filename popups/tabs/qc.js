@@ -8,9 +8,9 @@
 
   function meta(ctx, card) { return { id: card.id, idList: card.idList, idBoard: ctx.board.id }; }
 
+  /* Consolidated phase -- Install reads as one phase, one crew. */
   function stageOf(ctx, card) {
-    if (!ctx.boardCfg) return null;
-    return ctx.boardCfg.stages.filter(function (s) { return s.listId === card.idList; })[0] || null;
+    return O.phaseForCard(ctx.boardCfg, card);
   }
 
   function waitedFor(req) {

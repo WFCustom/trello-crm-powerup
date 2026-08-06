@@ -67,8 +67,25 @@
       O.el("div.wf-actions", { style: "flex-wrap:wrap" }, roleControls(ctx, m, role)));
   }
 
+  /**
+   * Everyone listed against this phase under ANY of the raw list names that
+   * collapse into it -- so people previously added under "Install (Tuesday)"
+   * still show on the single consolidated Install block rather than vanishing.
+   */
+  function specialistsFor(ctx, phaseName) {
+    var spec = ctx.roster.phaseSpecialists || {};
+    var seen = {}, out = [];
+    Object.keys(spec).forEach(function (rawName) {
+      if (O.phaseKey(rawName) !== phaseName) return;
+      (spec[rawName] || []).forEach(function (u) {
+        if (!seen[u]) { seen[u] = true; out.push(u); }
+      });
+    });
+    return out;
+  }
+
   function phaseBlock(ctx, phase, members) {
-    var list = (ctx.roster.phaseSpecialists || {})[phase.name] || [];
+    var list = specialistsFor(ctx, phase.name);
     var byUser = {};
     members.forEach(function (m) { byUser[m.username] = m; });
 
@@ -78,7 +95,15 @@
         document.createTextNode(byUser[u] ? label(byUser[u]) : u));
       chip.appendChild(O.el("button", {
         type: "button", title: "Remove", html: "&times;",
-        onClick: function () { WFRoster.removeSpecialist(ctx.t, phase.name, u).then(ctx.reload); }
+        onClick: function () {
+          // Clear them from every raw list name that folds into this phase.
+          var spec = ctx.roster.phaseSpecialists || {};
+          var names = Object.keys(spec).filter(function (n) { return O.phaseKey(n) === phase.name; });
+          if (names.indexOf(phase.name) === -1) names.push(phase.name);
+          return names.reduce(function (chain, n) {
+            return chain.then(function () { return WFRoster.removeSpecialist(ctx.t, n, u); });
+          }, Promise.resolve()).then(ctx.reload);
+        }
       }));
       chips.appendChild(chip);
     });
@@ -114,10 +139,16 @@
         var managers = ctx.roster.managers || [];
         var specialists = ctx.roster.phaseSpecialists || {};
 
+        // Show one tag per phase, not per underlying list, so someone on two
+        // Install lists reads as "Install" once.
         var phasesFor = function (username) {
-          return Object.keys(specialists).filter(function (p) {
-            return (specialists[p] || []).indexOf(username) !== -1;
+          var seen = {}, out = [];
+          Object.keys(specialists).forEach(function (p) {
+            if ((specialists[p] || []).indexOf(username) === -1) return;
+            var key = O.phaseKey(p);
+            if (!seen[key]) { seen[key] = true; out.push(key); }
           });
+          return out;
         };
 
         var head = O.el("div.wf-pagehead", null,
@@ -138,10 +169,9 @@
 
         var out = O.el("div", null, head, people);
 
-        var phases = ctx.boardCfg
-          ? ctx.boardCfg.stages.filter(function (s) { return s.isWorkPhase; })
-              .sort(function (a, b) { return a.order - b.order; })
-          : [];
+        // One block per phase, not per list -- the four Install lists share a
+        // single Install block with one crew. See WFOps.workPhases.
+        var phases = O.workPhases(ctx.boardCfg);
 
         out.appendChild(O.el("div.wf-group-h", { style: "margin-top:28px" },
           O.el("div.wf-group-t", { text: "Who does what" }),

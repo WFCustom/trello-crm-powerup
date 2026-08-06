@@ -7,9 +7,10 @@
 
   function meta(ctx, card) { return { id: card.id, idList: card.idList, idBoard: ctx.board.id }; }
 
+  /* Consolidated phase, so the four Install lists read as one Install and share
+     a single crew for hand-offs and QC. */
   function stageOf(ctx, card) {
-    if (!ctx.boardCfg) return null;
-    return ctx.boardCfg.stages.filter(function (s) { return s.listId === card.idList; })[0] || null;
+    return O.phaseForCard(ctx.boardCfg, card);
   }
 
   function bigTimer(work) {

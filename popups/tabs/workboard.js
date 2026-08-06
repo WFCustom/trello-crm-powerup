@@ -185,9 +185,9 @@
       return ctx.cards().then(function (cards) {
         if (!ctx.boardCfg) return O.empty("This board isn't mapped in config.js yet.");
 
-        var phases = ctx.boardCfg.stages
-          .filter(function (s) { return s.isWorkPhase; })
-          .sort(function (a, b) { return a.order - b.order; });
+        // One row per phase, not per list -- the four Install lists read as a
+        // single Install here. See WFOps.workPhases.
+        var phases = O.workPhases(ctx.boardCfg);
 
         var counts = { open: 0, running: 0, review: 0, assigned: 0 };
         cards.forEach(function (c) {
@@ -207,7 +207,7 @@
 
         var groups = O.el("div");
         phases.forEach(function (stage) {
-          var mine = cards.filter(function (c) { return c.idList === stage.listId; });
+          var mine = cards.filter(function (c) { return stage.listIds.indexOf(c.idList) !== -1; });
           if (!mine.length) return;
           groups.appendChild(O.el("div.wf-group-h", null,
             O.el("div.wf-group-t", { text: stage.name }),
