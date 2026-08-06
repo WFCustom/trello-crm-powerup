@@ -1,14 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 144 144" width="144" height="144" role="img" aria-label="Western Fabrication">
   <!--
-    Teton ridgeline: three peaks, one dominant, steep flanks and deep saddles.
-    Few inflection points on purpose, because a busier line reads as a wave at
-    the ~20px Trello renders board button icons at. White so it sits on the navy
-    window header and a dark board background alike, and stroked rather than
-    filled to echo the outline weight of the Western Fabrication mark.
+    Two peaks, one dominant. Four points and nothing else, because at the ~20px
+    Trello renders a board button icon at, every extra vertex turns the ridge
+    into a wave. White and stroked so it reads on the navy ops header and on a
+    dark board background, matching the outline weight of the company mark.
   -->
-  <g fill="none" stroke="#ffffff" stroke-width="7"
+  <g fill="none" stroke="#ffffff" stroke-width="8"
      stroke-linecap="round" stroke-linejoin="round">
-    <path d="M6 108 L38 54 L54 80 L70 14 L90 64 L112 36 L138 108"/>
-    <path d="M20 124 H124"/>
+    <path d="M8 120 L56 22 L86 72 L108 48 L136 120"/>
   </g>
 </svg>
