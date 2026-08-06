@@ -74,7 +74,9 @@
     function finish() {
       var reviewer = sel.value ? (byUser[sel.value] || { username: sel.value }) : null;
       return WFPhase.complete(ctx.t, meta(ctx, card))
-        .then(function () { return WFQC.request(ctx.t, meta(ctx, card), ctx.member, reviewer); })
+        .then(function () {
+          return WFQC.request(ctx.t, meta(ctx, card), stage ? stage.name : "", ctx.member, reviewer);
+        })
         .then(function () { return ctx.syncCard(card.id); });
     }
 
@@ -123,10 +125,21 @@
               }
             }),
             O.btn("Open card", { quiet: true, onClick: function () { O.openCard(card); } }),
-            O.btn("I'm done with this phase", {
-              primary: true,
-              onClick: function () { openQcChooser(ctx, card, stage); }
-            })),
+            // Only Assemble and Sandblast / Powder Coat gate on a peer check
+            // right now; everything else goes straight to manager approval as
+            // before. See WFQC.qcPhases.
+            WFQC.requiresQc(stage ? stage.name : "")
+              ? O.btn("I'm done — send for QC", {
+                  primary: true,
+                  onClick: function () { openQcChooser(ctx, card, stage); }
+                })
+              : O.btn("I'm done with this phase", {
+                  primary: true, busyText: "Sending for approval…",
+                  onClick: function () {
+                    return WFPhase.complete(ctx.t, meta(ctx, card))
+                      .then(function () { return ctx.syncCard(card.id); });
+                  }
+                })),
           reassignRow(ctx, card, stage))));
     return p;
   }

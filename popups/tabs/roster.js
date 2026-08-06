@@ -84,6 +84,56 @@
     return out;
   }
 
+  /**
+   * The QC checklist for a phase. Managers edit it here; edits apply to future
+   * checks only, because a check snapshots the list when it opens -- adding an
+   * item later must not make an already-signed check look incomplete.
+   */
+  function qcTemplateBlock(ctx, phase, templates) {
+    var items = (templates[phase.name] || []).slice();
+    var listWrap = O.el("div");
+
+    function paint() {
+      listWrap.innerHTML = "";
+      if (!items.length) {
+        listWrap.appendChild(O.el("div.hint", { text: "No checklist yet — the checker just confirms the work is right." }));
+      }
+      items.forEach(function (text, i) {
+        listWrap.appendChild(O.el("div", { style: "display:flex;align-items:center;gap:8px;padding:5px 0" },
+          O.el("div", { style: "flex:1;font-size:13.5px", text: (i + 1) + ". " + text }),
+          O.btn("Remove", {
+            small: true, quiet: true,
+            onClick: function () { items.splice(i, 1); paint(); }
+          })));
+      });
+    }
+    paint();
+
+    var input = O.el("input", { type: "text", placeholder: "e.g. Welds ground flush" });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); addItem(); }
+    });
+    function addItem() {
+      var v = input.value.trim();
+      if (!v) return;
+      items.push(v); input.value = ""; paint();
+    }
+
+    return O.el("div.phase-block", null,
+      O.el("h3", { text: phase.name + " — QC checklist" }),
+      O.el("div.hint", { text: "What a peer checks before this phase moves on. Changes affect future checks only." }),
+      listWrap,
+      O.el("div.add-row", { style: "margin-top:10px" }, input,
+        O.btn("Add", { onClick: addItem })),
+      O.el("div", { style: "margin-top:12px" },
+        O.btn("Save checklist", {
+          primary: true, busyText: "Saving…",
+          onClick: function () {
+            return WFQC.saveTemplate(ctx.t, phase.name, items).then(ctx.reload);
+          }
+        })));
+  }
+
   function phaseBlock(ctx, phase, members) {
     var list = specialistsFor(ctx, phase.name);
     var byUser = {};
@@ -131,7 +181,11 @@
     label: "Roster",
     roles: ["manager"],   // only managers change who can do what
     render: function (ctx) {
-      return WFRest.getLiveRatesCardDesc(ctx.t).catch(function () { return null; }).then(function (desc) {
+      return Promise.all([
+        WFRest.getLiveRatesCardDesc(ctx.t).catch(function () { return null; }),
+        WFQC.getTemplates(ctx.t).catch(function () { return {}; })
+      ]).then(function (loaded) {
+        var desc = loaded[0], qcTemplates = loaded[1] || {};
         var rates = desc ? WFMetrics.parseRatesCardDesc(desc) : {};
         var syncedAt = desc && desc.match(/Last synced:\s*(.+)/);
         var members = (ctx.board.members || []).slice()
@@ -183,6 +237,17 @@
           out.appendChild(grid);
         } else {
           out.appendChild(O.empty("No work phases configured for this board yet."));
+        }
+
+        // Checklists only for the phases that actually gate on a peer check.
+        var qcPhases = phases.filter(function (p) { return WFQC.requiresQc(p.name); });
+        if (qcPhases.length) {
+          out.appendChild(O.el("div.wf-group-h", { style: "margin-top:28px" },
+            O.el("div.wf-group-t", { text: "Quality checklists" }),
+            O.el("span.wf-group-n", { text: qcPhases.length + " gated phases" })));
+          var qcGrid = O.el("div.wf-panels.halves", { style: "margin-bottom:20px" });
+          qcPhases.forEach(function (p) { qcGrid.appendChild(qcTemplateBlock(ctx, p, qcTemplates)); });
+          out.appendChild(qcGrid);
         }
 
         out.appendChild(O.el("p.muted", { text:
