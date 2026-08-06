@@ -188,6 +188,31 @@
     return null;
   }
 
+  /**
+   * A stable colour per phase, so the same phase is the same colour every time
+   * and across views. Keyed off the phase's position in the flow rather than a
+   * hash, so the shop reads left-to-right through the process: office blues
+   * early, shop ambers in the middle, install green at the end, rework red.
+   */
+  var PHASE_COLORS = [
+    "#1f4e79", // Make Job Packet
+    "#2f6f9f", // CAD
+    "#4d7ba6", // Print CAD
+    "#8a6d3b", // CNC Table
+    "#b07d2b", // Assemble
+    "#7a5ea8", // Sandblast / Powder Coat
+    "#c8471c", // ReWork
+    "#1f6f4a"  // Install
+  ];
+
+  function phaseColor(boardCfg, phaseName) {
+    var all = workPhases(boardCfg);
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].name === phaseName) return PHASE_COLORS[i % PHASE_COLORS.length];
+    }
+    return "#5d6b7a";
+  }
+
   function initials(name) {
     return String(name || "?").trim().split(/\s+/).slice(0, 2)
       .map(function (w) { return w[0]; }).join("").toUpperCase();
@@ -626,6 +651,7 @@
     displayName: displayName, firstName: firstName,
     activeWork: activeWork, hasOrphanedWork: hasOrphanedWork,
     phaseKey: phaseKey, workPhases: workPhases, phaseForCard: phaseForCard,
+    phaseColor: phaseColor,
     openCard: openCard,
     get t() { return t; }
   };
