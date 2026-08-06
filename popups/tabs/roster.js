@@ -44,6 +44,38 @@
     return acts;
   }
 
+  /**
+   * Hourly rate, editable here. QuickBooks wins when a sync exists -- in that
+   * case the figure is shown read-only with where it came from, because typing
+   * over a synced rate would just be overwritten on the next run. Until then
+   * this is the only source of labour cost, and with no rate every job reads
+   * 100% margin, which is worse than useless.
+   */
+  function rateCell(ctx, m, syncedRate) {
+    if (syncedRate != null) {
+      return O.el("div", null,
+        O.el("div.wf-card-s", { text: "Rate · from QuickBooks" }),
+        O.el("div.wf-card-t", { text: "$" + syncedRate + "/hr" }));
+    }
+    var manual = (ctx.roster.rates || {})[m.username];
+    var input = O.el("input", {
+      type: "number", min: "0", step: "1", placeholder: "—",
+      value: manual != null ? String(manual) : "",
+      style: "width:78px;padding:5px 8px"
+    });
+    function save() {
+      return WFRoster.setRate(ctx.t, m.username, input.value).then(ctx.reload);
+    }
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); save(); }
+    });
+    return O.el("div", null,
+      O.el("div.wf-card-s", { text: manual != null ? "Rate · entered by hand" : "Rate · not set" }),
+      O.el("div", { style: "display:flex;align-items:center;gap:6px;margin-top:2px" },
+        O.el("span.wf-card-s", { text: "$" }), input,
+        O.btn("Save", { small: true, quiet: true, busyText: "…", onClick: save })));
+  }
+
   function personRow(ctx, m, rate, role, phases) {
     var edge = role === "manager" ? ".is-running" : (role === "office" ? ".is-review" : "");
     return O.el("div.wf-card" + edge, {
@@ -61,9 +93,7 @@
         phases.length
           ? phases.map(function (p) { return O.tag(p, "quiet"); })
           : [O.el("span.wf-card-s", { text: "No phases assigned" })]),
-      O.el("div", null,
-        O.el("div.wf-card-s", { text: "Labor rate" }),
-        O.el("div.wf-card-t", { text: rate != null ? "$" + rate + "/hr" : "—" })),
+      rateCell(ctx, m, rate),
       O.el("div.wf-actions", { style: "flex-wrap:wrap" }, roleControls(ctx, m, role)));
   }
 

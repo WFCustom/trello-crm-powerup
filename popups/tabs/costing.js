@@ -6,15 +6,21 @@
   "use strict";
   var O = WFOps;
 
+  /* Rate precedence, least to most authoritative: config.js seed, then rates
+     typed into the Roster, then a live QuickBooks sync. Typing over a synced
+     rate would only be overwritten on the next run, so QuickBooks wins. */
   function loadRates(ctx) {
-    var manual = (window.WF_CONFIG && window.WF_CONFIG.hourlyRates) || {};
+    var merged = {};
+    var seed = (window.WF_CONFIG && window.WF_CONFIG.hourlyRates) || {};
+    Object.keys(seed).forEach(function (k) { merged[k] = seed[k]; });
+    var fromRoster = (ctx.roster && ctx.roster.rates) || {};
+    Object.keys(fromRoster).forEach(function (k) { merged[k] = fromRoster[k]; });
+
     return WFRest.getLiveRatesCardDesc(ctx.t).then(function (desc) {
       var live = WFMetrics.parseRatesCardDesc(desc) || {};
-      var merged = {};
-      Object.keys(manual).forEach(function (k) { merged[k] = manual[k]; });
-      Object.keys(live).forEach(function (k) { merged[k] = live[k]; });   // live wins
+      Object.keys(live).forEach(function (k) { merged[k] = live[k]; });
       return merged;
-    }).catch(function () { return manual; });
+    }).catch(function () { return merged; });
   }
 
   function pct(n) { return n == null ? "—" : (Math.round(n * 10) / 10) + "%"; }
