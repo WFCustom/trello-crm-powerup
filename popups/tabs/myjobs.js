@@ -144,11 +144,11 @@
     return p;
   }
 
-  function grabRow(ctx, card, stage) {
-    return O.el("div.wf-card.is-open", { style: "grid-template-columns:1.6fr 1fr auto" },
+  function grabRow(ctx, card, stage, color) {
+    var row = O.el("div.wf-card.is-open", { style: "grid-template-columns:1.6fr 1fr auto" },
       O.el("div", null,
         O.el("div.wf-card-t", { text: card.name }),
-        O.el("div.wf-card-s", { text: (stage ? stage.name : "—") + " · waiting " + O.elapsedPhrase(WFStage.daysSince(card.dateLastActivity)) })),
+        O.el("div.wf-card-s", { text: "waiting " + O.elapsedPhrase(WFStage.daysSince(card.dateLastActivity)) })),
       O.el("div", null, O.tag("Up for grabs", "quiet")),
       O.el("div.wf-actions", null,
         O.btn("Take it", {
@@ -158,6 +158,71 @@
               .then(function () { return ctx.syncCard(card.id); });
           }
         })));
+    if (color) row.style.borderLeftColor = color;
+    return row;
+  }
+
+  /**
+   * One collapsible group per phase, colour-coded, so a worker scans to their
+   * phase instead of reading one long mixed list. Phases they're listed for
+   * come first and open; everything else is there but folded away.
+   */
+  function grabsByPhase(ctx, grabs) {
+    var wrap = O.el("div");
+    var order = O.workPhases(ctx.boardCfg);
+    var mySpecialties = {};
+    Object.keys(ctx.roster.phaseSpecialists || {}).forEach(function (p) {
+      if ((ctx.roster.phaseSpecialists[p] || []).indexOf(ctx.member.username) !== -1) {
+        mySpecialties[O.phaseKey(p)] = true;
+      }
+    });
+
+    var byPhase = {};
+    grabs.forEach(function (r) {
+      var name = r[1] ? r[1].name : "Unsorted";
+      (byPhase[name] = byPhase[name] || []).push(r);
+    });
+
+    var names = Object.keys(byPhase).sort(function (a, b) {
+      var am = mySpecialties[a] ? 0 : 1, bm = mySpecialties[b] ? 0 : 1;
+      if (am !== bm) return am - bm;                       // your phases first
+      var ai = order.map(function (p) { return p.name; }).indexOf(a);
+      var bi = order.map(function (p) { return p.name; }).indexOf(b);
+      return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);      // then flow order
+    });
+
+    names.forEach(function (name) {
+      var rows = byPhase[name];
+      var color = O.phaseColor(ctx.boardCfg, name);
+      var isMine = !!mySpecialties[name];
+      var open = isMine;                                   // yours expanded by default
+
+      var caret = O.el("span", { text: open ? "▾" : "▸",
+        style: "color:var(--wf-muted);font-size:13px;width:12px" });
+      var body = O.el("div.wf-cards", { style: "margin:10px 0 18px" },
+        rows.map(function (r) { return grabRow(ctx, r[0], r[1], color); }));
+      if (!open) body.style.display = "none";
+
+      var header = O.el("div", {
+        style: "display:flex;align-items:center;gap:12px;cursor:pointer;padding:12px 14px;" +
+               "border-radius:var(--wf-r-tile);background:#fff;box-shadow:var(--wf-shadow);" +
+               "border-left:5px solid " + color,
+        onClick: function () {
+          open = !open;
+          body.style.display = open ? "" : "none";
+          caret.textContent = open ? "▾" : "▸";
+        }
+      },
+        caret,
+        O.el("div", { style: "font-size:15.5px;font-weight:600;color:var(--wf-navy)", text: name }),
+        isMine ? O.tag("your phase", "go") : null,
+        O.el("span.wf-group-n", { style: "margin-left:auto",
+          text: rows.length + (rows.length === 1 ? " job" : " jobs") }));
+
+      wrap.appendChild(O.el("div", { style: "margin-bottom:4px" }, header, body));
+    });
+
+    return wrap;
   }
 
   function assignedRow(ctx, card, stage) {
@@ -255,9 +320,11 @@
 
         out.appendChild(O.el("div.wf-group-h", null,
           O.el("div.wf-group-t", { text: "Up for grabs" }),
-          O.el("span.wf-group-n", { text: grabs.length + (grabs.length === 1 ? " job" : " jobs") })));
+          O.el("span.wf-group-n", { text: grabs.length + (grabs.length === 1 ? " job" : " jobs") }),
+          grabs.length ? O.el("span.wf-card-s", { style: "margin-left:auto",
+            text: "grouped by phase — tap a phase to open it" }) : null));
         out.appendChild(grabs.length
-          ? O.el("div.wf-cards", null, grabs.map(function (r) { return grabRow(ctx, r[0], r[1]); }))
+          ? grabsByPhase(ctx, grabs)
           : O.empty("Everything in the shop is claimed. Nice."));
 
         return out;
