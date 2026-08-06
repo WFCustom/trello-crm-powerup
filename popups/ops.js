@@ -365,11 +365,25 @@
     return { close: close };
   }
 
+  /**
+   * Open a card WITHOUT losing this window.
+   *
+   * t.showCard() replaces the fullscreen modal with Trello's card view, which
+   * tears the ops window down entirely -- you come back to a cold start on the
+   * default tab, having lost your place. Opening in a browser tab leaves the
+   * window exactly as it was, so you just switch back.
+   *
+   * If the browser blocks the new tab we fall back to t.showCard rather than
+   * doing nothing; the tab you were on is remembered either way (see goTo), so
+   * reopening still lands you back where you were.
+   */
   function openCard(card) {
-    try {
-      var p = t.showCard(card.id);
-      if (p && p.catch) p.catch(function () { global.open(card.shortUrl, "_blank"); });
-    } catch (e) { global.open(card.shortUrl, "_blank"); }
+    var url = card && card.shortUrl;
+    if (url) {
+      var w = global.open(url, "_blank", "noopener");
+      if (w) return;
+    }
+    try { t.showCard(card.id); } catch (e) { /* nothing else we can do */ }
   }
 
   /* ------------------------------------------------------------------ cards */
@@ -564,6 +578,10 @@
   function goTo(id) {
     active = id;
     try { global.location.hash = id; } catch (e) {}
+    // Remember it against the member, not the URL: a reopened modal loads a
+    // fresh iframe at ./popups/ops.html with no hash, so the hash alone would
+    // drop you on the default tab every time the window is closed.
+    try { t.set("member", "private", "lastOpsTab", id); } catch (e) {}
     paintTabs();
     return renderActive();
   }
@@ -702,11 +720,27 @@
         ctx.realMember = member;
         ctx.actingAs = null;
 
-        var wanted = (global.location.hash || "").replace("#", "");
-        active = wanted || (ctx.isManager ? "dashboard" : "myjobs");
         paintSandbox();
-        paintTabs();
-        return renderActive();
+
+        // Come back where you left off. Precedence: an explicit deep link
+        // (#approvals) beats the remembered tab, which beats the role default.
+        // The remembered tab is what makes closing the window and returning
+        // from a card feel like resuming rather than starting over.
+        var linked = (global.location.hash || "").replace("#", "");
+        return (linked
+          ? Promise.resolve(linked)
+          : t.get("member", "private", "lastOpsTab", null).catch(function () { return null; })
+        ).then(function (remembered) {
+          var fallback = ctx.isManager ? "dashboard" : "myjobs";
+          var pick = remembered || fallback;
+          // A remembered tab may no longer be visible to this role.
+          if (!visibleTabs().filter(function (d) { return d.id === pick; })[0]) {
+            pick = (visibleTabs()[0] || {}).id || fallback;
+          }
+          active = pick;
+          paintTabs();
+          return renderActive();
+        });
       });
     }).catch(function (e) {
       document.getElementById("view").innerHTML =
