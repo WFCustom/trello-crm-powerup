@@ -99,16 +99,31 @@ window.WF_CONFIG = {
         { listId: "69a743b54496e7a4b924acf6", name: "Portal - CRM",           order: 2,  slaDays: 2 },
         { listId: "6939928cc816d7f7d1d2d7b9", name: "Make Job Packet",        order: 3,  slaDays: 2, isWorkPhase: true },
         { listId: "6a1da6d2bbab87140dc09a20", name: "Portal - Final Measure", order: 4,  slaDays: 3 },
-        { listId: "69a730d9c78b097f55a36df0", name: "CAD",                    order: 5,  slaDays: 2, isWorkPhase: true },
-        { listId: "69a72f453b199d4c20fb3868", name: "Print CAD",              order: 6,  slaDays: 1, isWorkPhase: true },
-        { listId: "6a5127b8d82e999f671bd840", name: "CNC Table",              order: 7,  slaDays: 2, isWorkPhase: true },
-        { listId: "69a7308d189ef61a8836dbe3", name: "Assemble",               order: 8,  slaDays: 3, isWorkPhase: true },
+        // Office/customer sign-off before drawing starts. Deliberately NOT a
+        // work phase: nobody claims it or runs a timer, but a job can sit here
+        // for days and that wait should show up in stage timing.
+        { listId: "6a7b2cfae726b81b76e4d253", name: "Final Approval",         order: 5,  slaDays: 3 },
+        { listId: "69a730d9c78b097f55a36df0", name: "CAD",                    order: 6,  slaDays: 2, isWorkPhase: true },
+        { listId: "69a72f453b199d4c20fb3868", name: "Print CAD",              order: 7,  slaDays: 1, isWorkPhase: true },
+        // Three assemble columns, one per job type. There is no separate CNC
+        // cutting stage any more -- cutting and assembly both happen in
+        // Assemble CNC (confirmed Aug 2026), which is why the old "CNC Table"
+        // list is gone rather than renamed.
+        { listId: "6a74439686dbb64b8cc70edd", name: "Assemble Legacy",        order: 8,  slaDays: 3, isWorkPhase: true },
+        { listId: "6a7443a48c1c28981da03fae", name: "Assemble CAP",           order: 8,  slaDays: 3, isWorkPhase: true },
+        { listId: "6a7443b2439b65a180127f86", name: "Assemble CNC",           order: 8,  slaDays: 3, isWorkPhase: true },
         { listId: "69a730a894c7174c44e8c4e0", name: "Sandblast / Powder Coat",order: 9,  slaDays: 3, isWorkPhase: true },
         { listId: "69a730bbe0235638ecd9b160", name: "ReWork",                 order: 10, slaDays: 1, isException: true, isWorkPhase: true },
-        { listId: "69b9c6369e225825d36d6f6e", name: "Install",                order: 11, slaDays: 1, isWorkPhase: true },
-        { listId: "69b9c6a7260f97abbb4194ac", name: "Install (Tuesday)",      order: 11, slaDays: 1, isWorkPhase: true },
-        { listId: "69a730b27303839ae3bc9add", name: "Install",                order: 11, slaDays: 1, isWorkPhase: true, isPrimaryTarget: true },
-        { listId: "69b9c6d1a44e75fbc3138376", name: "Install",                order: 11, slaDays: 1, isWorkPhase: true },
+        // Four Install columns that are one phase of work. `name` is what the
+        // board actually calls each column so people recognise it; `phase`
+        // states outright that they group into a single Install -- one crew,
+        // one allowance, one QC checklist. Previously this was inferred by
+        // stripping "(Tuesday)" off the name, which stopped working the moment
+        // the columns were renamed to North/Central/South.
+        { listId: "69b9c6a7260f97abbb4194ac", name: "Next week Install",      order: 11, slaDays: 1, isWorkPhase: true, phase: "Install" },
+        { listId: "69a730b27303839ae3bc9add", name: "Install Central",        order: 11, slaDays: 1, isWorkPhase: true, phase: "Install", isPrimaryTarget: true },
+        { listId: "69b9c6369e225825d36d6f6e", name: "Install North",          order: 11, slaDays: 1, isWorkPhase: true, phase: "Install" },
+        { listId: "69b9c6d1a44e75fbc3138376", name: "Install South",          order: 11, slaDays: 1, isWorkPhase: true, phase: "Install" },
         { listId: "69a848037fc4f5092a6d5dcd", name: "Billing",                order: 12, slaDays: 3 },
         { listId: "69ab2cc348d183651451c342", name: "Outstanding Invoices",   order: 13, slaDays: 7 },
         { listId: "69a85a220a76edceafef6544", name: "Job Closed / Done",      order: 14, slaDays: null, isTerminal: "won" },
@@ -122,7 +137,8 @@ window.WF_CONFIG = {
         "69ca9524dcdebbcd9de18724",
         "69c5bbdde17a5ba2be4d9c9a",
         "69b1d857555baf0446ba452f",
-        "69ca95355818da46016724f0"
+        "69ca95355818da46016724f0",
+        "6a8363087942f4f4b2ffecb6"
       ]
     },
 
@@ -137,17 +153,16 @@ window.WF_CONFIG = {
         { listId: "69c5938bba5ecc0c9b1170f1", name: "Home Show Contacts",     order: 1, slaDays: 3 },
         { listId: "6a303ba14cc3b023f03894f2", name: "Awaiting Response",      order: 2, slaDays: 2 },
         { listId: "6a0630c1e29e7edf8ca1ba47", name: "Sales / Measure",        order: 3, slaDays: 2 },
-        { listId: "6a2c2653371fc8bef8b96e53", name: "Converted / Go Measure", order: 4, slaDays: 2 },
-        { listId: "6a06326a0283cc5ad25f16a8", name: "OTP Bid/Measure",        order: 5, slaDays: 2 },
         { listId: "6a2c2a0ed3dbfae76e18dd50", name: "Generate Bid/Estimate",  order: 6, slaDays: 2 },
         { listId: "6a0630c1e29e7edf8ca1ba53", name: "Bid Sent / Pending",     order: 7, slaDays: 5 },
-        { listId: "6a0632c1f884a57950f5fd47", name: "Bead Laid - WON",        order: 8, slaDays: 1 },
+        // Renamed from "Bead Laid - WON" (Aug 2026): same point in the pipeline,
+        // now naming the wait it actually describes.
+        { listId: "6a832c00c95dda242a3f7b07", name: "Bid Won / Awaiting Site Prep", order: 8, slaDays: 1 },
         { listId: "6a0632d4e00f8e94875028bb", name: "Finalize Details / Job Packet", order: 9,  slaDays: 2 },
         { listId: "6a2c44c90adea7f2ec6f4223", name: "Make Job Packet",        order: 10, slaDays: 2 },
         { listId: "6a2c2be47b421e8758650f57", name: "Final Measure",          order: 11, slaDays: 3 },
         { listId: "6a0630c1e29e7edf8ca1ba46", name: "Transfer to Build Pipeline", order: 12, slaDays: 1, isHandoff: true, handoffTo: "Office Operations / Intake" },
-        { listId: "6a0630c1e29e7edf8ca1ba4e", name: "Lost Bids",              order: 13, slaDays: null, isTerminal: "lost" },
-        { listId: "6a30462de3f61c6ccdcdf555", name: "Out of Scope",           order: 13, slaDays: null, isTerminal: "lost" }
+        { listId: "6a0630c1e29e7edf8ca1ba4e", name: "Lost Bids",              order: 13, slaDays: null, isTerminal: "lost" }
       ],
       excludedLists: [
         "6a0630c1e29e7edf8ca1ba54",
