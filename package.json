@@ -1,0 +1,13 @@
+{
+  "name": "trello-crm-powerup",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Western Fabrication Ops Power-Up for Trello. Static site served by GitHub Pages; the tests here run the same files under Node.",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "test:live": "node --test \"test/*.live.js\""
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
