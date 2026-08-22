@@ -142,7 +142,20 @@ window.WF_CONFIG = {
         "69c5bbdde17a5ba2be4d9c9a",
         "69b1d857555baf0446ba452f",
         "69ca95355818da46016724f0",
-        "6a8363087942f4f4b2ffecb6"
+        "6a8363087942f4f4b2ffecb6",
+        // MASTER JOB - 2+ Phases. A long-running job that recurs for months --
+        // staircases as a contractor finishes each four-plex, then grab rails
+        // once the siding is done. One card stands for the whole job, with a
+        // checklist item per building, precisely so nobody has to drag it back
+        // and forth through the workflow. It is legitimately in several phases
+        // at once, or none.
+        //
+        // So it is deliberately outside stage timing rather than a stage: a
+        // master card is meant to sit here for months, and any SLA would read
+        // as permanently overdue. The real work is tracked on the ordinary job
+        // cards raised off the checklist. No automation hangs off this column
+        // yet -- excluding it just says the omission is on purpose.
+        "6a85f0876750dbb42946cb09"
       ]
     },
 

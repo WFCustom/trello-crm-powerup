@@ -36,16 +36,12 @@ const CFG = win.WF_CONFIG;
  * altogether, rather than added to excludedLists.
  *
  * Prefer excludedLists in config.js -- that is the documented place to say "on
- * the board, not part of the flow". This escape hatch exists only so a brand
- * new column does not fail the build before anyone has decided what it is.
- * Anything sitting here for long is a decision nobody has made yet.
+ * the board, not part of the flow", and it records the reason next to the id.
+ * This escape hatch exists only so a brand new column cannot fail the build
+ * before anyone has decided what it is. Anything left sitting here is a
+ * decision nobody has made yet, so keep it empty.
  */
-const KNOWN_UNMAPPED = new Set([
-  // "MASTER JOB - 2+ Phases" -- holds the parent card of a combination job
-  // (see splitsInto in lib/jobtype.js). Awaiting a decision on whether it
-  // belongs in excludedLists or should be a stage of its own.
-  "6a85f0876750dbb42946cb09"
-]);
+const KNOWN_UNMAPPED = new Set([]);
 
 const liveLists = {};   // boardId -> Map(listId -> name)
 
