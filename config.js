@@ -171,9 +171,6 @@ window.WF_CONFIG = {
       excludedLists: [
         "6a0630c1e29e7edf8ca1ba54",
         "6a31800a88b8bbbfd33d27cb",
-        "6a0630c1e29e7edf8ca1ba5a",
-        "6a0630c1e29e7edf8ca1ba5b",
-        "6a0630c1e29e7edf8ca1ba5c",
         "6a0630c1e29e7edf8ca1ba5e"
       ]
     }
