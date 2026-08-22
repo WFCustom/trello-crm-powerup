@@ -36,7 +36,7 @@ window.WF_CONFIG = {
   // breaks either way.
   phaseSpecialists: {
         "CAD": ["dalejacaway", "bannista"],
-        "CNC Table": ["dalejacaway", "bannista"],
+        "Assemble CNC": ["dalejacaway", "bannista"],
   },
 
   // Live, QuickBooks-driven hourly rates. A scheduled task (see
@@ -114,16 +114,20 @@ window.WF_CONFIG = {
         { listId: "6a7443b2439b65a180127f86", name: "Assemble CNC",           order: 8,  slaDays: 3, isWorkPhase: true },
         { listId: "69a730a894c7174c44e8c4e0", name: "Sandblast / Powder Coat",order: 9,  slaDays: 3, isWorkPhase: true },
         { listId: "69a730bbe0235638ecd9b160", name: "ReWork",                 order: 10, slaDays: 1, isException: true, isWorkPhase: true },
-        // Four Install columns that are one phase of work. `name` is what the
-        // board actually calls each column so people recognise it; `phase`
-        // states outright that they group into a single Install -- one crew,
-        // one allowance, one QC checklist. Previously this was inferred by
-        // stripping "(Tuesday)" off the name, which stopped working the moment
-        // the columns were renamed to North/Central/South.
-        { listId: "69b9c6a7260f97abbb4194ac", name: "Next week Install",      order: 11, slaDays: 1, isWorkPhase: true, phase: "Install" },
-        { listId: "69a730b27303839ae3bc9add", name: "Install Central",        order: 11, slaDays: 1, isWorkPhase: true, phase: "Install", isPrimaryTarget: true },
-        { listId: "69b9c6369e225825d36d6f6e", name: "Install North",          order: 11, slaDays: 1, isWorkPhase: true, phase: "Install" },
-        { listId: "69b9c6d1a44e75fbc3138376", name: "Install South",          order: 11, slaDays: 1, isWorkPhase: true, phase: "Install" },
+        // Four Install columns that are one phase of work: one crew, one time
+        // allowance, one QC checklist. `phase` states that grouping outright,
+        // instead of the old trick of stripping "(Tuesday)" off the name, which
+        // stopped working the moment the columns were renamed.
+        //
+        // `name` stays plain "Install" deliberately. Older builds of
+        // popups/ops.js derive the phase from the NAME, so naming these
+        // North/Central/South would split one Install into four for anyone on a
+        // cached copy. `region` holds the board's own label, where nothing
+        // load-bearing depends on it.
+        { listId: "69b9c6a7260f97abbb4194ac", name: "Install", phase: "Install", region: "Next week",  order: 11, slaDays: 1, isWorkPhase: true },
+        { listId: "69a730b27303839ae3bc9add", name: "Install", phase: "Install", region: "Central",    order: 11, slaDays: 1, isWorkPhase: true, isPrimaryTarget: true },
+        { listId: "69b9c6369e225825d36d6f6e", name: "Install", phase: "Install", region: "North",      order: 11, slaDays: 1, isWorkPhase: true },
+        { listId: "69b9c6d1a44e75fbc3138376", name: "Install", phase: "Install", region: "South",      order: 11, slaDays: 1, isWorkPhase: true },
         { listId: "69a848037fc4f5092a6d5dcd", name: "Billing",                order: 12, slaDays: 3 },
         { listId: "69ab2cc348d183651451c342", name: "Outstanding Invoices",   order: 13, slaDays: 7 },
         { listId: "69a85a220a76edceafef6544", name: "Job Closed / Done",      order: 14, slaDays: null, isTerminal: "won" },
