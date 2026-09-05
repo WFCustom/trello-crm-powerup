@@ -120,7 +120,11 @@
    * item later must not make an already-signed check look incomplete.
    */
   function qcTemplateBlock(ctx, phase, templates) {
-    var items = (templates[phase.name] || []).slice();
+    // An unsaved phase shows the shipped draft so the list isn't blank; a phase
+    // saved as empty stays empty, because [] is truthy and wins here.
+    var items = (templates[phase.name] || WFQC.defaultTemplate(phase.name)).slice();
+    var unsaved = !Array.isArray(templates[phase.name]);
+    var selfCheck = WFQC.requiresSelfCheck(phase.name);
     var listWrap = O.el("div");
 
     /* Items are editable in place -- reword one without deleting and retyping.
@@ -169,8 +173,14 @@
     }
 
     return O.el("div.phase-block", null,
-      O.el("h3", { text: phase.name + " — QC checklist" }),
-      O.el("div.hint", { text: "What a peer checks before this phase moves on. Changes affect future checks only." }),
+      O.el("div", { style: "display:flex;align-items:center;gap:10px;flex-wrap:wrap" },
+        O.el("h3", { style: "margin:0", text: phase.name + " — QC checklist" }),
+        selfCheck ? O.tag("self-checked", "warn") : O.tag("peer-checked", "go"),
+        unsaved ? O.tag("draft — not saved yet", "quiet") : null),
+      O.el("div.hint", { style: "margin-top:6px", text: selfCheck
+        ? "The person who does " + phase.name + " ticks this themselves before the job moves on. "
+          + "No second signature, and an unticked line just means it isn't finished."
+        : "What a peer checks before this phase moves on. Changes affect future checks only." }),
       listWrap,
       O.el("div.add-row", { style: "margin-top:10px" }, input,
         O.btn("Add", { onClick: addItem })),
@@ -288,12 +298,18 @@
           out.appendChild(O.empty("No work phases configured for this board yet."));
         }
 
-        // Checklists only for the phases that actually gate on a peer check.
-        var qcPhases = phases.filter(function (p) { return WFQC.requiresQc(p.name); });
+        /* Every phase that carries a checklist, peer-checked or self-checked.
+           Both need editing here; only the peer ones stop for someone else. */
+        var qcPhases = phases.filter(function (p) { return WFQC.needsChecklist(p.name); });
         if (qcPhases.length) {
+          var peerCount = qcPhases.filter(function (p) { return WFQC.requiresQc(p.name); }).length;
+          var selfCount = qcPhases.length - peerCount;
+          var counts = [];
+          if (peerCount) counts.push(peerCount + " peer-checked");
+          if (selfCount) counts.push(selfCount + " self-checked");
           out.appendChild(O.el("div.wf-group-h", { style: "margin-top:28px" },
             O.el("div.wf-group-t", { text: "Quality checklists" }),
-            O.el("span.wf-group-n", { text: qcPhases.length + " gated phases" })));
+            O.el("span.wf-group-n", { text: counts.join(" · ") })));
           var qcGrid = O.el("div.wf-panels.halves", { style: "margin-bottom:20px" });
           qcPhases.forEach(function (p) { qcGrid.appendChild(qcTemplateBlock(ctx, p, qcTemplates)); });
           out.appendChild(qcGrid);
