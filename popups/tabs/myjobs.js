@@ -94,6 +94,66 @@
     });
   }
 
+  /**
+   * Self-check: the drafter works their own list and signs it. Ticking every
+   * line advances the job; leaving one unticked just means it isn't finished, so
+   * nothing moves and nothing is blamed on anyone.
+   */
+  function openSelfCheck(ctx, card, stage) {
+    var phase = stage ? stage.name : "";
+    WFQC.getTemplate(ctx.t, phase).then(function (template) {
+      var items = template.length ? template : ["Work is complete and correct"];
+      var rows = [];
+      var body = O.el("div");
+
+      items.forEach(function (text) {
+        var box = O.el("input", { type: "checkbox" });
+        var note = O.el("input", { type: "text", placeholder: "What's outstanding? (optional)" });
+        note.style.display = "";
+        box.addEventListener("change", function () {
+          note.style.display = box.checked ? "none" : "";
+        });
+        rows.push({ text: text, box: box, note: note });
+        body.appendChild(O.el("div", { style: "padding:10px 0;border-bottom:1px solid var(--wf-band)" },
+          O.el("label", { style: "display:flex;align-items:center;gap:10px;margin:0;font-weight:400" },
+            box, O.el("span", { style: "font-size:14px;color:var(--wf-text)", text: text })),
+          O.el("div", { style: "margin-top:6px" }, note)));
+      });
+
+      var status = O.el("div.hint", { style: "margin-top:12px" });
+
+      O.dialog({
+        title: phase + " checklist",
+        note: card.name,
+        content: O.el("div", null, body, status,
+          O.el("div.hint", { style: "margin-top:12px",
+            text: "Tick everything and the job moves on. Anything left unticked keeps it with you — "
+                + "it's saved, so you can come back to it." })),
+        buttons: [{
+          label: "Sign off and move it on", primary: true, busyText: "Signing…",
+          onClick: function () {
+            var results = rows.map(function (r) {
+              return { text: r.text, result: r.box.checked ? "pass" : "fail", note: r.note.value };
+            });
+            return WFQC.submitSelfCheck(ctx.t, meta(ctx, card), phase, ctx.member, results)
+              .then(function (res) {
+                if (!res.passed) {
+                  window.alert("Still to do:\n\n" +
+                    res.outstanding.map(function (i) {
+                      return "• " + i.text + (i.note ? " — " + i.note : "");
+                    }).join("\n") +
+                    "\n\nSaved. The job stays with you until these are ticked.");
+                }
+                return ctx.syncCard(card.id);
+              });
+          }
+        }]
+      });
+    }).catch(function (e) {
+      window.alert((e && e.message) || "Couldn't open the checklist.");
+    });
+  }
+
   function activeCard(ctx, card, stage) {
     var w = O.activeWork(card);
     var pct = WFPhase.percentComplete(w) || 0;
@@ -125,10 +185,17 @@
               }
             }),
             O.btn("Open card", { quiet: true, onClick: function () { O.openCard(card); } }),
-            // Only Assemble and Sandblast / Powder Coat gate on a peer check
-            // right now; everything else goes straight to manager approval as
-            // before. See WFQC.qcPhases.
-            WFQC.requiresQc(stage ? stage.name : "")
+            /* Three ways to finish a phase:
+                 self-checked (CAD)  -- work your own list, signing advances it
+                 peer-checked (shop) -- hand it to someone else to check
+                 everything else     -- straight to manager approval, as before
+               See WFQC.qcPhases and WFQC.selfCheckPhases. */
+            WFQC.requiresSelfCheck(stage ? stage.name : "")
+              ? O.btn("I'm done — run my checklist", {
+                  primary: true,
+                  onClick: function () { openSelfCheck(ctx, card, stage); }
+                })
+              : WFQC.requiresQc(stage ? stage.name : "")
               ? O.btn("I'm done — send for QC", {
                   primary: true,
                   onClick: function () { openQcChooser(ctx, card, stage); }
@@ -167,15 +234,10 @@
    * phase instead of reading one long mixed list. Phases they're listed for
    * come first and open; everything else is there but folded away.
    */
-  function grabsByPhase(ctx, grabs) {
+  function grabsByPhase(ctx, grabs, mySpecialties, scoped) {
     var wrap = O.el("div");
     var order = O.workPhases(ctx.boardCfg);
-    var mySpecialties = {};
-    Object.keys(ctx.roster.phaseSpecialists || {}).forEach(function (p) {
-      if ((ctx.roster.phaseSpecialists[p] || []).indexOf(ctx.member.username) !== -1) {
-        mySpecialties[O.phaseKey(p)] = true;
-      }
-    });
+    mySpecialties = mySpecialties || {};
 
     var byPhase = {};
     grabs.forEach(function (r) {
@@ -195,7 +257,9 @@
       var rows = byPhase[name];
       var color = O.phaseColor(ctx.boardCfg, name);
       var isMine = !!mySpecialties[name];
-      var open = isMine;                                   // yours expanded by default
+      // When the list is already scoped to your phases there is nothing else in
+      // it, so folding anything away would just hide work from you.
+      var open = scoped || isMine;
 
       var caret = O.el("span", { text: open ? "▾" : "▸",
         style: "color:var(--wf-muted);font-size:13px;width:12px" });
@@ -259,6 +323,22 @@
         var me = ctx.member.username;
         var mine = [], assigned = [], grabs = [], waiting = [];
 
+        /**
+         * The phases this person is listed for in Roster, by consolidated name.
+         *
+         * Workers see only these: a welder shouldn't have to read past CAD and
+         * Install to find their own queue. Managers and office keep the full
+         * view -- they're the ones handing work out, so hiding phases from them
+         * would defeat the point.
+         */
+        var myPhases = {};
+        var spec = ctx.roster.phaseSpecialists || {};
+        Object.keys(spec).forEach(function (p) {
+          if ((spec[p] || []).indexOf(me) !== -1) myPhases[O.phaseKey(p)] = true;
+        });
+        var scoped = (ctx.role || "worker") === "worker";
+        var phaseNames = Object.keys(myPhases);
+
         cards.forEach(function (card) {
           var stage = stageOf(ctx, card);
           if (!stage || !stage.isWorkPhase) return;
@@ -277,13 +357,27 @@
           }
         });
 
+        /* Only unclaimed work is scoped. Anything already yours stays visible
+           whatever phase it's in -- a job you're timing, or one handed to you,
+           must never disappear behind a roster change, or it strands with the
+           clock still running and no way to pause it. */
+        if (scoped) {
+          grabs = grabs.filter(function (r) { return r[1] && myPhases[r[1].name]; });
+        }
+
         var out = O.el("div", null,
           O.el("div.wf-pagehead", null,
             O.el("div.wf-h1", { text: "Hey " + (ctx.member.fullName || me).split(" ")[0] }),
             O.el("div.wf-sub", {
               text: mine.length ? "You're on " + mine.length + (mine.length === 1 ? " job" : " jobs") + " right now"
-                                : "Nothing running — pick something up below"
-            })));
+                                : (scoped && !phaseNames.length
+                                    ? "No phases assigned to you yet"
+                                    : "Nothing running — pick something up below")
+            }),
+            scoped && phaseNames.length
+              ? O.el("div", { style: "display:flex;gap:6px;flex-wrap:wrap;margin-left:auto" },
+                  phaseNames.sort().map(function (n) { return O.tag(n, "quiet"); }))
+              : null));
 
         mine.forEach(function (r) { out.appendChild(activeCard(ctx, r[0], r[1])); });
 
@@ -318,14 +412,32 @@
           })));
         }
 
-        out.appendChild(O.el("div.wf-group-h", null,
-          O.el("div.wf-group-t", { text: "Up for grabs" }),
-          O.el("span.wf-group-n", { text: grabs.length + (grabs.length === 1 ? " job" : " jobs") }),
-          grabs.length ? O.el("span.wf-card-s", { style: "margin-left:auto",
-            text: "grouped by phase — tap a phase to open it" }) : null));
-        out.appendChild(grabs.length
-          ? grabsByPhase(ctx, grabs)
-          : O.empty("Everything in the shop is claimed. Nice."));
+        /* Someone with no phases assigned has nothing to pick up, and saying so
+           is far better than showing them the whole shop's queue -- which is
+           what happened before, and is the thing being fixed here. Their own
+           work above still shows, so nothing they've started gets stranded. */
+        if (scoped && !phaseNames.length) {
+          out.appendChild(O.el("div.wf-group-h", null,
+            O.el("div.wf-group-t", { text: "Up for grabs" })));
+          out.appendChild(O.el("div.wf-empty", null,
+            O.el("div", { text: "No phases assigned to you yet." }),
+            O.el("div.muted", { style: "margin-top:6px",
+              text: "A manager sets this in the Roster tab. Once you're listed for a phase, "
+                  + "the jobs waiting in it show up here." })));
+        } else {
+          out.appendChild(O.el("div.wf-group-h", null,
+            O.el("div.wf-group-t", { text: scoped ? "Up for grabs in your phases" : "Up for grabs" }),
+            O.el("span.wf-group-n", { text: grabs.length + (grabs.length === 1 ? " job" : " jobs") }),
+            grabs.length && !scoped
+              ? O.el("span.wf-card-s", { style: "margin-left:auto",
+                  text: "grouped by phase — tap a phase to open it" })
+              : null));
+          out.appendChild(grabs.length
+            ? grabsByPhase(ctx, grabs, myPhases, scoped)
+            : O.empty(scoped
+                ? "Nothing waiting in your phases right now."
+                : "Everything in the shop is claimed. Nice."));
+        }
 
         return out;
       });
