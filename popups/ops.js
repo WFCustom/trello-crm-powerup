@@ -149,19 +149,41 @@
   }
 
   /**
-   * The board has four separate Install lists (plus "Install (Tuesday)") that
-   * are all the same job as far as the shop is concerned. Everywhere we talk
-   * about a *phase* -- the work board, the roster, who specialises in what --
-   * they should read as one Install.
+   * Which phase a list belongs to.
    *
-   * Rule: a phase's identity is its name with any parenthetical qualifier
-   * stripped, so "Install (Tuesday)" and "Install" are the same phase, while
-   * "Sandblast / Powder Coat" and "Print CAD" are untouched. The underlying
-   * lists stay exactly as they are on the board -- this only changes how they
-   * are grouped and labelled.
+   * The board has four Install columns — North, Central, South and "Next week
+   * Install" — that are one phase of work as far as the shop is concerned: one
+   * crew, one time allowance, one QC checklist.
+   *
+   * This used to be inferred by stripping any parenthetical off the list name,
+   * which worked only while the odd one out was called "Install (Tuesday)". The
+   * moment the columns were renamed the inference broke and one Install silently
+   * became four. config.js now says the grouping outright with a `phase` field,
+   * and this consults that map.
+   *
+   * The old stripping rule stays as a fallback, because roster entries are
+   * stored under whatever the list was called when someone was added to it.
    */
+  var phaseAlias = {};
+  var aliasBuilt = false;
+
+  function buildPhaseAliases(boardCfg) {
+    phaseAlias = {};
+    ((boardCfg && boardCfg.stages) || []).forEach(function (s) {
+      if (s && s.phase && s.name) phaseAlias[s.name] = s.phase;
+    });
+    aliasBuilt = true;
+    return phaseAlias;
+  }
+
   function phaseKey(name) {
-    return String(name || "").replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s+/g, " ").trim();
+    var raw = String(name || "").trim();
+    // Built lazily as well as at startup: phaseKey is called from tabs and from
+    // the roster, and getting the answer wrong because of call order would
+    // quietly split one Install back into four.
+    if (!aliasBuilt && ctx && ctx.boardCfg) buildPhaseAliases(ctx.boardCfg);
+    if (phaseAlias[raw]) return phaseAlias[raw];
+    return raw.replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s+/g, " ").trim();
   }
 
   /** Work phases, de-duplicated by name, each carrying all of its lists. */
@@ -170,7 +192,7 @@
     var byKey = {};
     (boardCfg.stages || []).forEach(function (s) {
       if (!s.isWorkPhase) return;
-      var key = phaseKey(s.name);
+      var key = s.phase || phaseKey(s.name);
       if (!byKey[key]) {
         byKey[key] = {
           name: key, order: s.order, listIds: [], slaDays: s.slaDays,
@@ -209,8 +231,9 @@
     "#1f4e79", // Make Job Packet
     "#2f6f9f", // CAD
     "#4d7ba6", // Print CAD
-    "#8a6d3b", // CNC Table
-    "#b07d2b", // Assemble
+    "#8a6d3b", // Assemble Legacy
+    "#b07d2b", // Assemble CAP
+    "#a8862f", // Assemble CNC
     "#7a5ea8", // Sandblast / Powder Coat
     "#c8471c", // ReWork
     "#1f6f4a"  // Install
@@ -543,6 +566,154 @@
 
   function tab(def) { tabs.push(def); }
 
+  /* -------------------------------------------------------------- tab order */
+
+  /**
+   * Where the tab bar's order comes from.
+   *
+   * Three layers, most specific first: this person's own arrangement, then the
+   * board's default, then the order the scripts happen to load in. A saved
+   * order is a list of tab ids, and anything NOT in it keeps its registration
+   * position at the end -- so adding a new tab later makes it appear rather
+   * than silently vanish because an old saved order didn't mention it.
+   */
+  var BOARD_ORDER_KEY = "wfTabOrder";
+  var MY_ORDER_KEY = "tabOrder";
+  var boardOrder = null;     // shop default, set by a manager
+  var myOrder = null;        // this person's override, if any
+
+  function applyOrder(list, order) {
+    if (!order || !order.length) return list;
+    var pos = {};
+    order.forEach(function (id, i) { pos[id] = i; });
+    // Array.prototype.sort is stable, so unknown ids keep their relative
+    // registration order among themselves.
+    return list.slice().sort(function (a, b) {
+      var ai = pos[a.id], bi = pos[b.id];
+      if (ai === undefined && bi === undefined) return 0;
+      if (ai === undefined) return 1;
+      if (bi === undefined) return -1;
+      return ai - bi;
+    });
+  }
+
+  /** Every registered tab id, in the order currently in force. */
+  function fullOrder() {
+    return applyOrder(tabs, myOrder || boardOrder).map(function (d) { return d.id; });
+  }
+
+  /**
+   * Rebuild a full order after the VISIBLE tabs were rearranged.
+   *
+   * Someone reordering only sees the tabs their role gets, so a naive save would
+   * drop every hidden one. Walking the full list and refilling only the visible
+   * slots keeps the hidden tabs exactly where they were.
+   */
+  function weaveOrder(fullIds, visibleIds, newVisibleIds) {
+    var queue = newVisibleIds.slice();
+    return fullIds.map(function (id) {
+      return visibleIds.indexOf(id) !== -1 ? queue.shift() : id;
+    });
+  }
+
+  function saveMyOrder(ids) {
+    myOrder = ids;
+    return Promise.resolve(t.set("member", "private", MY_ORDER_KEY, ids))
+      .catch(function () { /* order is a convenience; never block the UI */ });
+  }
+
+  function saveBoardOrder(ids) {
+    boardOrder = ids;
+    return Promise.resolve(t.set("board", "shared", BOARD_ORDER_KEY, ids));
+  }
+
+  function clearMyOrder() {
+    myOrder = null;
+    return Promise.resolve(t.set("member", "private", MY_ORDER_KEY, null))
+      .catch(function () {});
+  }
+
+  /** Move one visible tab to sit immediately before another, and save it. */
+  function moveTabBefore(draggedId, targetId) {
+    var vis = visibleTabs().map(function (d) { return d.id; });
+    var from = vis.indexOf(draggedId), to = vis.indexOf(targetId);
+    if (from === -1 || to === -1 || from === to) return Promise.resolve();
+    var next = vis.slice();
+    next.splice(from, 1);
+    next.splice(next.indexOf(targetId) + (from < to ? 1 : 0), 0, draggedId);
+    return saveMyOrder(weaveOrder(fullOrder(), vis, next)).then(paintTabs);
+  }
+
+  /**
+   * The gear. Up/down rather than drag, because the shop may be on a tablet and
+   * HTML5 drag does nothing on touch.
+   */
+  function openTabOrder() {
+    var vis = visibleTabs();
+    var ids = vis.map(function (d) { return d.id; });
+    var labelOf = {};
+    vis.forEach(function (d) { labelOf[d.id] = d.label; });
+    var listWrap = el("div");
+
+    function paintList() {
+      listWrap.innerHTML = "";
+      ids.forEach(function (id, i) {
+        listWrap.appendChild(el("div", {
+          style: "display:flex;align-items:center;gap:8px;padding:7px 0;" +
+                 "border-bottom:1px solid var(--wf-band)"
+        },
+          el("span.wf-card-s", { style: "width:20px;text-align:right", text: (i + 1) + "." }),
+          el("div", { style: "flex:1;font-size:14.5px;font-weight:600;color:var(--wf-navy)",
+                      text: labelOf[id] }),
+          btn("↑", { small: true, quiet: true, onClick: function () {
+            if (i === 0) return;
+            var tmp = ids[i - 1]; ids[i - 1] = ids[i]; ids[i] = tmp; paintList();
+          } }),
+          btn("↓", { small: true, quiet: true, onClick: function () {
+            if (i === ids.length - 1) return;
+            var tmp = ids[i + 1]; ids[i + 1] = ids[i]; ids[i] = tmp; paintList();
+          } })));
+      });
+    }
+    paintList();
+
+    var buttons = [{
+      label: "Save for me", primary: true, busyText: "Saving…",
+      onClick: function () {
+        return saveMyOrder(weaveOrder(fullOrder(), visibleTabs().map(function (d) { return d.id; }), ids))
+          .then(paintTabs);
+      }
+    }];
+    if (ctx.isManager) {
+      buttons.push({
+        label: "Set as the board default", busyText: "Saving…",
+        onClick: function () {
+          var woven = weaveOrder(fullOrder(), visibleTabs().map(function (d) { return d.id; }), ids);
+          // Setting the shop default while holding a personal override would
+          // look like nothing happened, so drop the override at the same time.
+          return saveBoardOrder(woven).then(clearMyOrder).then(paintTabs);
+        }
+      });
+    }
+    if (myOrder) {
+      buttons.push({
+        label: "Reset to the board default", quiet: true, busyText: "Resetting…",
+        onClick: function () { return clearMyOrder().then(paintTabs); }
+      });
+    }
+
+    dialog({
+      title: "Arrange the tabs",
+      note: myOrder ? "You're using your own arrangement" : "You're using the board default",
+      content: el("div", null, listWrap,
+        el("div.hint", { style: "margin-top:12px",
+          text: ctx.isManager
+            ? "Save for me changes only your bar. Set as the board default changes it for everyone who hasn't arranged their own."
+            : "This changes only your own bar. Nobody else is affected." })),
+      buttons: buttons
+    });
+  }
+
   /**
    * Tabs declare who they're for with `roles: ["manager", "office"]`.
    * Anything undeclared is visible to everyone, so a worker's default view is
@@ -552,27 +723,66 @@
    * determined person can still read the underlying card through Trello itself.
    */
   function visibleTabs() {
-    return tabs.filter(function (d) {
+    var mine = tabs.filter(function (d) {
       if (d.roles) return d.roles.indexOf(ctx.role) !== -1;
       if (d.managerOnly) return ctx.isManager;
       return true;
     });
+    return applyOrder(mine, myOrder || boardOrder);
   }
 
   function paintTabs() {
     var bar = document.getElementById("tabbar");
     bar.innerHTML = "";
+    // A drag ends in a click on the tab you dropped, which would switch tabs
+    // as a side effect of rearranging. This swallows exactly that one click.
+    var justDragged = false;
+
     visibleTabs().forEach(function (d) {
       var b = el("button.wf-tab" + (d.id === active ? ".is-active" : ""), {
         type: "button",
-        onClick: function () { goTo(d.id); }
+        draggable: "true",
+        onClick: function () { if (!justDragged) goTo(d.id); }
       }, document.createTextNode(d.label));
       if (d.badgeCount) {
         var n = d.badgeCount(ctx);
         if (n) b.appendChild(el("span.wf-badge", { text: String(n) }));
       }
+
+      b.addEventListener("dragstart", function (e) {
+        justDragged = false;
+        b.style.opacity = "0.4";
+        try { e.dataTransfer.setData("text/plain", d.id); } catch (err) {}
+        try { e.dataTransfer.effectAllowed = "move"; } catch (err) {}
+      });
+      b.addEventListener("dragend", function () {
+        b.style.opacity = "";
+        bar.querySelectorAll(".wf-tab").forEach(function (x) { x.style.borderLeft = ""; });
+      });
+      b.addEventListener("dragover", function (e) {
+        e.preventDefault();
+        b.style.borderLeft = "3px solid var(--wf-steel)";
+      });
+      b.addEventListener("dragleave", function () { b.style.borderLeft = ""; });
+      b.addEventListener("drop", function (e) {
+        e.preventDefault();
+        b.style.borderLeft = "";
+        var dragged = "";
+        try { dragged = e.dataTransfer.getData("text/plain"); } catch (err) {}
+        if (!dragged || dragged === d.id) return;
+        justDragged = true;
+        moveTabBefore(dragged, d.id);
+      });
+
       bar.appendChild(b);
     });
+
+    bar.appendChild(el("button.wf-tab", {
+      type: "button",
+      title: "Arrange the tabs",
+      style: "margin-left:auto;font-size:15px",
+      onClick: openTabOrder
+    }, document.createTextNode("⚙")));
   }
 
   function goTo(id) {
@@ -694,19 +904,28 @@
       return Promise.all([
         t.board("id", "name", "members"),
         t.member("username", "fullName"),
-        WFRoster.getRoster(t).catch(function () { return { managers: [], phaseSpecialists: {} }; })
+        WFRoster.getRoster(t).catch(function () { return { managers: [], phaseSpecialists: {} }; }),
+        t.get("board", "shared", BOARD_ORDER_KEY, null).catch(function () { return null; }),
+        t.get("member", "private", MY_ORDER_KEY, null).catch(function () { return null; })
       ]).then(function (r) {
         var board = r[0], member = r[1], roster = r[2];
+        boardOrder = Array.isArray(r[3]) && r[3].length ? r[3] : null;
+        myOrder = Array.isArray(r[4]) && r[4].length ? r[4] : null;
 
         document.getElementById("boardName").textContent = board.name;
         document.getElementById("meName").textContent = (member.fullName || member.username).split(" ")[0];
         document.getElementById("meInitials").textContent = initials(member.fullName || member.username);
 
+        var boardCfg = WFStage.getBoardConfig(board.id);
+        // Must happen before any tab renders -- phaseKey is useless until it
+        // knows how this board groups its lists.
+        buildPhaseAliases(boardCfg);
+
         ctx = {
           t: t,
           board: board,
           member: member,
-          boardCfg: WFStage.getBoardConfig(board.id),
+          boardCfg: boardCfg,
           roster: roster,
           role: resolveRole(roster, member.username),
           isManager: resolveRole(roster, member.username) === "manager",
@@ -758,7 +977,9 @@
     runningSince: runningSince, isAwaitingStart: isAwaitingStart,
     displayName: displayName, firstName: firstName,
     activeWork: activeWork, hasOrphanedWork: hasOrphanedWork,
-    phaseKey: phaseKey, workPhases: workPhases, phaseForCard: phaseForCard,
+    phaseKey: phaseKey, buildPhaseAliases: buildPhaseAliases,
+    applyOrder: applyOrder, weaveOrder: weaveOrder,
+    workPhases: workPhases, phaseForCard: phaseForCard,
     phaseColor: phaseColor,
     openCard: openCard,
     get t() { return t; }
