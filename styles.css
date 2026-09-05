@@ -456,3 +456,62 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .wf-stats { grid-template-columns: repeat(2, 1fr); }
   .wf-panels.split, .wf-panels.halves { grid-template-columns: 1fr; }
 }
+
+
+/* ------------------------------------------------------- phase columns */
+
+/* A Trello-shaped board: one column per phase, left to right in the same order
+   the lists sit in on the board itself. Horizontal scroll rather than squeezing
+   nine phases onto one screen -- narrow columns would make every card unreadable,
+   and sideways scrolling is the motion people already use on the board. */
+.wf-cols {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  overflow-x: auto;
+  padding: 2px 2px 14px;
+}
+.wf-col {
+  flex: 0 0 296px;
+  background: #fff;
+  border-radius: var(--wf-r-tile);
+  box-shadow: var(--wf-shadow);
+  border-top: 4px solid var(--wf-steel);
+  overflow: hidden;
+}
+/* Collapsed keeps its place in the row -- the header is the handle you click to
+   bring it back, so it must stay where you left it. */
+.wf-col.is-collapsed { flex-basis: 296px; opacity: .82; }
+
+.wf-col-h {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.wf-col-h:hover { filter: brightness(.97); }
+.wf-col-caret { width: 11px; font-size: 12px; color: var(--wf-muted); }
+.wf-col-t {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--wf-navy);
+  line-height: 1.25;
+}
+.wf-col-n {
+  padding: 2px 9px;
+  border-radius: var(--wf-r-pill);
+  background: var(--wf-band);
+  font-size: 12px;
+  color: var(--wf-muted);
+  white-space: nowrap;
+}
+.wf-col-b { display: grid; gap: 9px; padding: 0 11px 12px; }
+.wf-col-b .wf-card { padding: 13px 14px; }
+.wf-col-empty { padding: 0 13px 14px; font-size: 12.5px; color: var(--wf-muted); }
+
+@media (max-width: 700px) {
+  .wf-col { flex-basis: 84vw; }
+}
