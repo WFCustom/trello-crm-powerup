@@ -182,7 +182,14 @@
     roles: ["manager", "office"],
     render: function (ctx) {
       stopTimers();
-      return ctx.cards().then(function (cards) {
+      return Promise.all([
+        ctx.cards(),
+        // Which columns this person folded away last time. A failure here just
+        // means everything opens, which is the right way to fail.
+        ctx.t.get("member", "private", "colsWorkboard", null).catch(function () { return null; })
+      ]).then(function (loaded) {
+        var cards = loaded[0];
+        var collapsedState = loaded[1] || {};
         if (!ctx.boardCfg) return O.empty("This board isn't mapped in config.js yet.");
 
         // One row per phase, not per list -- the four Install lists read as a
@@ -205,19 +212,27 @@
                   counts.review + " to approve"
           }));
 
+        /* Every work phase gets a column, including the empty ones. Trello does
+           the same, and it matters: a phase that vanishes when it empties makes
+           the columns shuffle sideways, so you'd lose your place every time a
+           job moved. */
         var groups = O.el("div");
-        phases.forEach(function (stage) {
-          var mine = cards.filter(function (c) { return stage.listIds.indexOf(c.idList) !== -1; });
-          if (!mine.length) return;
-          groups.appendChild(O.el("div.wf-group-h", null,
-            O.el("div.wf-group-t", { text: stage.name }),
-            O.el("span.wf-group-n", { text: mine.length + (mine.length === 1 ? " job" : " jobs") })));
-          groups.appendChild(O.el("div.wf-cards", null, mine.map(function (c) {
-            return jobCard(ctx, c, stage);
-          })));
-        });
+        groups.appendChild(O.phaseColumns(ctx, {
+          phases: phases,
+          key: "colsWorkboard",
+          collapsed: collapsedState,
+          cardsFor: function (stage) {
+            return cards
+              .filter(function (c) { return stage.listIds.indexOf(c.idList) !== -1; })
+              .map(function (c) { return jobCard(ctx, c, stage); });
+          },
+          noteFor: function () { return "No jobs in this phase."; }
+        }));
 
-        if (!groups.childNodes.length) groups.appendChild(O.empty("No jobs in any work phase right now."));
+        if (!phases.length) {
+          groups.innerHTML = "";
+          groups.appendChild(O.empty("No work phases configured for this board yet."));
+        }
 
         search.addEventListener("input", function () {
           var q = search.value.toLowerCase();
