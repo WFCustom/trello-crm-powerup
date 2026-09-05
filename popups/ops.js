@@ -337,6 +337,93 @@
 
   function empty(text) { return el("div.wf-empty", { text: text }); }
 
+  /* ---------------------------------------------------------- phase columns */
+
+  /** A phase colour at low opacity, for tinting a column header. */
+  function tint(hex, alpha) {
+    var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || ""));
+    if (!m) return "transparent";
+    return "rgba(" + parseInt(m[1], 16) + "," + parseInt(m[2], 16) + "," +
+           parseInt(m[3], 16) + "," + alpha + ")";
+  }
+
+  /**
+   * Lay phases out as columns, left to right, the way the board itself reads.
+   *
+   * Stacked phase groups meant scrolling past CAD and Print CAD to reach
+   * Assemble, which is the opposite of what a board view is for. Columns put
+   * every phase on screen at once in flow order, each one collapsible so the
+   * phases somebody doesn't care about can be folded down to a header.
+   *
+   * Colour is deliberately subtle: a solid rule across the top of the column and
+   * a wash behind its header, both from WFOps.phaseColor, so the same phase is
+   * the same colour in every view. Enough to stop nine columns blurring
+   * together, not so much that it looks like a warning.
+   *
+   * spec:
+   *   phases      [{ name }]            in the order to show them
+   *   cardsFor    fn(phase) -> [node]   the cards for one column
+   *   noteFor     fn(phase) -> string   optional line under an empty column
+   *   key         string                where to remember what's collapsed
+   *   tagFor      fn(phase) -> node     optional badge beside the title
+   */
+  function phaseColumns(ctx, spec) {
+    var collapsed = (spec.collapsed && typeof spec.collapsed === "object") ? spec.collapsed : {};
+    var row = el("div.wf-cols");
+
+    (spec.phases || []).forEach(function (phase) {
+      var color = phaseColor(ctx.boardCfg, phase.name);
+      var cards = spec.cardsFor(phase) || [];
+      var isShut = !!collapsed[phase.name];
+
+      /* The cards are the same nodes the stacked views use, and those set a
+         multi-column grid inline for a full-width row. In a 296px column that
+         squashes every field, so stack their contents instead. */
+      cards.forEach(function (n) {
+        if (n && n.style) n.style.gridTemplateColumns = "1fr";
+      });
+
+      var caret = el("span.wf-col-caret", { text: isShut ? "▸" : "▾" });
+      var body = cards.length
+        ? el("div.wf-col-b", null, cards)
+        : el("div.wf-col-empty", { text: (spec.noteFor && spec.noteFor(phase)) || "Nothing here." });
+      if (isShut) body.style.display = "none";
+
+      var col = el("div.wf-col" + (isShut ? ".is-collapsed" : ""));
+      col.style.borderTopColor = color;
+
+      var head = el("div.wf-col-h", {
+        title: isShut ? "Show " + phase.name : "Hide " + phase.name,
+        onClick: function () {
+          isShut = !isShut;
+          body.style.display = isShut ? "none" : "";
+          caret.textContent = isShut ? "▸" : "▾";
+          col.classList.toggle("is-collapsed", isShut);
+          head.title = (isShut ? "Show " : "Hide ") + phase.name;
+          collapsed[phase.name] = isShut;
+          if (spec.key && ctx && ctx.t) {
+            // Purely a convenience -- if the write fails the layout still works,
+            // it just won't remember next time. Goes through ctx.t rather than
+            // the module handle so this works for whoever is passed in.
+            try { ctx.t.set("member", "private", spec.key, collapsed); } catch (e) {}
+          }
+        }
+      },
+        caret,
+        el("div.wf-col-t", { text: phase.name }),
+        spec.tagFor ? spec.tagFor(phase) : null,
+        el("span.wf-col-n", { text: String(cards.length) }));
+      head.style.background = tint(color, 0.1);
+
+      col.appendChild(head);
+      col.appendChild(body);
+      row.appendChild(col);
+    });
+
+    return row;
+  }
+
+
   /**
    * In-window dialog. We're already a fullscreen page, so this is our own
    * overlay rather than t.popup() -- which is narrow, fixed-width, and would
@@ -980,7 +1067,7 @@
     phaseKey: phaseKey, buildPhaseAliases: buildPhaseAliases,
     applyOrder: applyOrder, weaveOrder: weaveOrder,
     workPhases: workPhases, phaseForCard: phaseForCard,
-    phaseColor: phaseColor,
+    phaseColor: phaseColor, tint: tint, phaseColumns: phaseColumns,
     openCard: openCard,
     get t() { return t; }
   };
