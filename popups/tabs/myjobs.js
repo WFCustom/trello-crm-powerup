@@ -230,14 +230,16 @@
   }
 
   /**
-   * One collapsible group per phase, colour-coded, so a worker scans to their
-   * phase instead of reading one long mixed list. Phases they're listed for
-   * come first and open; everything else is there but folded away.
+   * The queue as columns, one per phase, left to right in board order.
+   *
+   * This used to be a stack of collapsible groups, which meant scrolling past
+   * phases you don't work to reach the one you do. Columns put them all on
+   * screen at once; each still folds to its header, and what you fold stays
+   * folded next time.
    */
-  function grabsByPhase(ctx, grabs, mySpecialties, scoped) {
-    var wrap = O.el("div");
-    var order = O.workPhases(ctx.boardCfg);
+  function grabsByPhase(ctx, grabs, mySpecialties, scoped, collapsedState) {
     mySpecialties = mySpecialties || {};
+    var order = O.workPhases(ctx.boardCfg);
 
     var byPhase = {};
     grabs.forEach(function (r) {
@@ -245,48 +247,28 @@
       (byPhase[name] = byPhase[name] || []).push(r);
     });
 
-    var names = Object.keys(byPhase).sort(function (a, b) {
-      var am = mySpecialties[a] ? 0 : 1, bm = mySpecialties[b] ? 0 : 1;
-      if (am !== bm) return am - bm;                       // your phases first
-      var ai = order.map(function (p) { return p.name; }).indexOf(a);
-      var bi = order.map(function (p) { return p.name; }).indexOf(b);
-      return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);      // then flow order
+    /* Board order, always -- the columns must not move about as jobs come and
+       go. Anything that isn't a mapped work phase goes on the end rather than
+       being dropped. */
+    var phases = order.filter(function (p) { return byPhase[p.name]; });
+    Object.keys(byPhase).forEach(function (name) {
+      if (!phases.some(function (p) { return p.name === name; })) phases.push({ name: name });
     });
 
-    names.forEach(function (name) {
-      var rows = byPhase[name];
-      var color = O.phaseColor(ctx.boardCfg, name);
-      var isMine = !!mySpecialties[name];
-      // When the list is already scoped to your phases there is nothing else in
-      // it, so folding anything away would just hide work from you.
-      var open = scoped || isMine;
-
-      var caret = O.el("span", { text: open ? "▾" : "▸",
-        style: "color:var(--wf-muted);font-size:13px;width:12px" });
-      var body = O.el("div.wf-cards", { style: "margin:10px 0 18px" },
-        rows.map(function (r) { return grabRow(ctx, r[0], r[1], color); }));
-      if (!open) body.style.display = "none";
-
-      var header = O.el("div", {
-        style: "display:flex;align-items:center;gap:12px;cursor:pointer;padding:12px 14px;" +
-               "border-radius:var(--wf-r-tile);background:#fff;box-shadow:var(--wf-shadow);" +
-               "border-left:5px solid " + color,
-        onClick: function () {
-          open = !open;
-          body.style.display = open ? "" : "none";
-          caret.textContent = open ? "▾" : "▸";
-        }
+    return O.phaseColumns(ctx, {
+      phases: phases,
+      key: scoped ? "colsMyJobs" : "colsMyJobsAll",
+      collapsed: collapsedState,
+      cardsFor: function (phase) {
+        return (byPhase[phase.name] || []).map(function (r) {
+          return grabRow(ctx, r[0], r[1], O.phaseColor(ctx.boardCfg, phase.name));
+        });
       },
-        caret,
-        O.el("div", { style: "font-size:15.5px;font-weight:600;color:var(--wf-navy)", text: name }),
-        isMine ? O.tag("your phase", "go") : null,
-        O.el("span.wf-group-n", { style: "margin-left:auto",
-          text: rows.length + (rows.length === 1 ? " job" : " jobs") }));
-
-      wrap.appendChild(O.el("div", { style: "margin-bottom:4px" }, header, body));
+      noteFor: function () { return "Nothing waiting here."; },
+      tagFor: function (phase) {
+        return mySpecialties[phase.name] ? O.tag("yours", "go") : null;
+      }
     });
-
-    return wrap;
   }
 
   function assignedRow(ctx, card, stage) {
@@ -319,7 +301,15 @@
     render: function (ctx) {
       ticks.forEach(clearInterval); ticks = [];
 
-      return ctx.cards().then(function (cards) {
+      return Promise.all([
+        ctx.cards(),
+        // Which columns this person folded away last time; failing open is fine.
+        ctx.t.get("member", "private", "colsMyJobs", null).catch(function () { return null; }),
+        ctx.t.get("member", "private", "colsMyJobsAll", null).catch(function () { return null; })
+      ]).then(function (loaded) {
+        var cards = loaded[0];
+        var collapsedScoped = loaded[1] || {};
+        var collapsedAll = loaded[2] || {};
         var me = ctx.member.username;
         var mine = [], assigned = [], grabs = [], waiting = [];
 
@@ -428,12 +418,13 @@
           out.appendChild(O.el("div.wf-group-h", null,
             O.el("div.wf-group-t", { text: scoped ? "Up for grabs in your phases" : "Up for grabs" }),
             O.el("span.wf-group-n", { text: grabs.length + (grabs.length === 1 ? " job" : " jobs") }),
-            grabs.length && !scoped
+            grabs.length
               ? O.el("span.wf-card-s", { style: "margin-left:auto",
-                  text: "grouped by phase — tap a phase to open it" })
+                  text: "one column per phase — tap a heading to fold it away" })
               : null));
           out.appendChild(grabs.length
-            ? grabsByPhase(ctx, grabs, myPhases, scoped)
+            ? grabsByPhase(ctx, grabs, myPhases, scoped,
+                           scoped ? collapsedScoped : collapsedAll)
             : O.empty(scoped
                 ? "Nothing waiting in your phases right now."
                 : "Everything in the shop is claimed. Nice."));
