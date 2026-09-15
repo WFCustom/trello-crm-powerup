@@ -38,6 +38,7 @@ const LOAD_ORDER = [
   "lib/jobtype.js",
   "lib/advance.js",
   "lib/sop.js",
+  "lib/eos.js",
   "popups/ops.js"
 ];
 
