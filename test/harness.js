@@ -40,6 +40,8 @@ const LOAD_ORDER = [
   "lib/sop.js",
   "lib/eos.js",
   "lib/tables.js",
+  "lib/aging.js",
+  "lib/records.js",
   "popups/ops.js"
 ];
 
