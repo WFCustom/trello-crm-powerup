@@ -1,7 +1,7 @@
 /**
  * Route-aware auto-advance.
  *
- * lib/advance.js works by monkey-patching WFPhase.approveAndAdvance. Nothing
+ * lib/advance.js works by monkey-patching WFPhase.advance. Nothing
  * imports it and nothing calls it by name, so if a refactor renames or reorders
  * the function it wraps, the patch simply stops being applied -- no error, no
  * failing import, just every job quietly walking the flat board order again and
@@ -116,6 +116,25 @@ test("the route-aware wrapper is installed over WFPhase.approveAndAdvance", () =
 
   // And the flag really does come from lib/advance.js, not from phase.js.
   assert.equal(bare.WFPhase.__routeAware, undefined);
+});
+
+test("the wrapper sits on advance, so every route into a move gets routing", async () => {
+  /* WHY THIS MATTERS MORE THAN IT LOOKS.
+   *
+   * advance() is now the single place a phase is retired and a card moved;
+   * approveAndAdvance just checks the approval flag and delegates to it. If the
+   * wrapper were still attached to approveAndAdvance, the QC path -- which
+   * calls advance directly, because there is no approval in it -- would quietly
+   * fall back to the flat column order and send plain railings into CNC.
+   *
+   * That is the exact bug lib/advance.js exists to prevent, reintroduced by the
+   * migration that was meant to be safe. So it is asserted against advance
+   * itself rather than only through its caller.
+   */
+  jobTypeReads("CNC only");
+  const moves = captureMoves(win);
+  await win.WFPhase.advance(awaitingApproval(CAD), card(CAD), MANAGER, { verb: "Passed QC" });
+  assert.deepStrictEqual(moves, [ASSEMBLE_CNC]);
 });
 
 /* ============================================================== it routes */
