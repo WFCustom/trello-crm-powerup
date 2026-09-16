@@ -3,10 +3,26 @@
 <head>
   <meta charset="utf-8">
   <title>Western Fabrication Ops</title>
+
+  <!--
+    EVERY LOCAL ASSET CARRIES ?v=  AND THE NUMBER MUST BE BUMPED ON EVERY DEPLOY.
+
+    A Power-Up runs inside a Trello iframe, and GitHub Pages serves static files
+    with long cache lifetimes. The iframe therefore keeps serving whatever it
+    fetched the first time -- through a hard refresh of the outer page, because
+    the outer page is not what is cached. We shipped a restyled stylesheet and a
+    rebuilt Roster tab, confirmed both live on GitHub Pages, and neither
+    appeared. That is not a mystery to debug each time; it is a missing version
+    token.
+
+    Bump WF_BUILD below whenever anything under lib/, popups/ or styles.css
+    changes. Any new value works -- it only has to differ from the last one.
+  -->
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&display=swap">
-  <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=Barlow+Condensed:wght@500;600;700&display=swap">
+  <link rel="stylesheet" href="../styles.css?v=20260916d">
   <style>
     body { padding: 0; background: var(--wf-ground); }
   </style>
@@ -31,45 +47,63 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
   <script src="https://p.trellocdn.com/power-up.min.js"></script>
-  <script src="../config.js"></script>
-  <!-- Must load before trello-rest.js so it can wrap the write methods. -->
-  <script src="../lib/sandbox.js"></script>
-  <script src="../lib/board-extras.js"></script>
-  <script src="../lib/stage.js"></script>
-  <script src="../lib/trello-rest.js"></script>
-  <script src="../lib/phase.js"></script>
-  <script src="../lib/metrics.js"></script>
-  <script src="../lib/roster.js"></script>
-  <script src="../lib/pricing.js"></script>
-  <script src="../lib/costing.js"></script>
-  <script src="../lib/qc.js"></script>
-  <script src="../lib/jobtype.js"></script>
-  <script src="../lib/advance.js"></script>
-  <script src="../lib/sop.js"></script>
-  <script src="../lib/eos.js"></script>
-  <script src="../lib/tables.js"></script>
-  <script src="../lib/aging.js"></script>
-  <script src="../lib/records.js"></script>
-  <script src="../lib/cardview.js"></script>
-  <script src="../lib/permissions.js"></script>
 
-  <script src="./ops.js"></script>
-  <!-- Shared by every tab that lists jobs; must load after ops.js (uses WFOps). -->
-  <script src="./cardpanel.js"></script>
-  <!-- Shared by My jobs and the Work board; must load before the tabs. -->
-  <script src="./checklist.js"></script>
-  <script src="./tabs/floor.js"></script>
-  <script src="./tabs/dashboard.js"></script>
-  <script src="./tabs/workboard.js"></script>
-  <script src="./tabs/myjobs.js"></script>
-  <script src="./tabs/qc.js"></script>
-  <script src="./tabs/approvals.js"></script>
-  <script src="./tabs/performance.js"></script>
-  <script src="./tabs/costing.js"></script>
-  <script src="./tabs/sops.js"></script>
-  <script src="./tabs/eos.js"></script>
-  <script src="./tabs/records.js"></script>
-  <script src="./tabs/roster.js"></script>
+  <script>
+    /* The one place the build number lives. Everything below is written out
+       with it appended, so there is no list of URLs to keep in step. */
+    window.WF_BUILD = "20260916d";
+    document.write(
+      [
+        "../config.js",
+        /* Must load before trello-rest.js so it can wrap the write methods. */
+        "../lib/sandbox.js",
+        "../lib/board-extras.js",
+        "../lib/stage.js",
+        "../lib/trello-rest.js",
+        "../lib/phase.js",
+        "../lib/metrics.js",
+        "../lib/roster.js",
+        "../lib/pricing.js",
+        "../lib/costing.js",
+        "../lib/qc.js",
+        "../lib/jobtype.js",
+        "../lib/advance.js",
+        "../lib/sop.js",
+        "../lib/eos.js",
+        "../lib/tables.js",
+        "../lib/aging.js",
+        "../lib/records.js",
+        "../lib/cardview.js",
+        "../lib/permissions.js",
+
+        "./ops.js",
+        /* Shared by every tab that lists jobs; must load after ops.js. */
+        "./cardpanel.js",
+        /* Shared by My jobs and the Work board; must load before the tabs. */
+        "./checklist.js",
+
+        "./tabs/floor.js",
+        "./tabs/dashboard.js",
+        "./tabs/workboard.js",
+        "./tabs/myjobs.js",
+        "./tabs/qc.js",
+        "./tabs/approvals.js",
+        "./tabs/performance.js",
+        "./tabs/costing.js",
+        "./tabs/sops.js",
+        "./tabs/eos.js",
+        "./tabs/records.js",
+        "./tabs/roster.js"
+      ].map(function (src) {
+        /* document.write rather than appending elements: these files are plain
+           scripts that must run in order, and dynamically appended scripts do
+           not guarantee that. This runs once, before the page is parsed, which
+           is the case document.write is actually correct for. */
+        return '<script src="' + src + "?v=" + window.WF_BUILD + '"><\/script>';
+      }).join("")
+    );
+  </script>
+
   <script>WFOps.start();</script>
 </body>
 </html>

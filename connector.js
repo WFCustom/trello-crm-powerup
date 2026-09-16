@@ -247,9 +247,21 @@ function boardButtons(t) {
     {
       icon: ICON,
       text: "WF Ops Dashboard",
+      // The query string is a cache-buster, and it is load-bearing.
+      //
+      // ops.html carries a ?v= on every script and stylesheet it loads, but
+      // that only helps if the browser fetches a fresh ops.html to read the
+      // new number from. Inside a Trello iframe it does not: GitHub Pages
+      // serves long cache lifetimes and a hard refresh of the outer page
+      // leaves the iframe's copy alone. We shipped a restyled sheet and a
+      // rebuilt Roster, confirmed both live, and neither appeared.
+      //
+      // Date.now() means this one small HTML file is refetched every time the
+      // window opens. That is a few kilobytes against the alternative, which
+      // is somebody staring at code that shipped hours ago.
       callback: (t2) => t2.modal({
         title: "WF Ops Dashboard",
-        url: "./popups/ops.html",
+        url: "./popups/ops.html?t=" + Date.now(),
         fullscreen: true,
         accentColor: "#14293d"
       })
