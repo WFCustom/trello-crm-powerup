@@ -22,6 +22,30 @@ const { load, plain } = require("./harness");
 const win = load();
 const P = win.WFPricing;
 
+/* ================================ the field has to be the one on the board */
+
+test("config names the job-value field the board actually has", () => {
+  /* THE REGRESSION THIS EXISTS FOR.
+   *
+   * config.js used to say the job-value field was "Job Value (QB)". The board's
+   * field is "$Value" — which is what this module was written against, what its
+   * own header documents, and what its fallback default returns. Config
+   * overrode the correct default with a name that has never existed, so every
+   * lookup missed and job value came back empty across the whole Power-Up: no
+   * money on the dashboard, no margin, no costing.
+   *
+   * Nothing errored, because a field that isn't there and a field that's empty
+   * look identical from here. That is exactly why it survived so long, and why
+   * the check has to be an assertion rather than a comment.
+   */
+  assert.equal(win.WF_CONFIG.customFieldNames.jobValue, "$Value");
+
+  // And what the module actually resolves to, which is the value every caller
+  // gets. The bug WAS the disagreement between these two: a module written for
+  // one name, a config supplying another, and the config winning silently.
+  assert.equal(P.fieldName(), "$Value");
+});
+
 const t = {};   // the REST layer is stubbed per test; `t` is only passed through
 
 /* ================================================================ parsing */

@@ -189,12 +189,28 @@ window.WF_CONFIG = {
     }
   },
 
-  // Custom Field names this Power-Up will look for (read-only, via t.getRestApi()).
-  // These are populated by the QuickBooks/Gmail bridge scheduled task — see
-  // /scheduled-task-template/quickbooks-trello-sync.SKILL.md. If a board doesn't
-  // have these custom fields yet, the Power-Up just skips that data silently.
+  /* Custom Field names this Power-Up looks for, as they are spelled ON THE
+     BOARD. Read-only, via t.getRestApi().
+
+     THESE MUST MATCH THE BOARD EXACTLY, AND THE FAILURE IS SILENT. For a long
+     time jobValue read "Job Value (QB)" — a field that has never existed here.
+     The board's field is "$Value", which is what lib/pricing.js was written
+     against and what its own fallback default says. Config overrode the correct
+     default with a wrong name, every lookup missed, and job value came back
+     empty everywhere: no money on the dashboard, no margin, no costing. Nothing
+     errored, because a missing field is indistinguishable from an empty one.
+
+     Matching is case-insensitive where it matters (the board spells it "JOB
+     TYPE"), but the WORDS have to be right.
+
+     jobCost and leadReceivedAt do NOT exist on the Office Operations board
+     today. They were intended to be created by the QuickBooks/Gmail bridge
+     scheduled task — see /scheduled-task-template/quickbooks-trello-sync.SKILL.md
+     — which has not populated them. Left named so the sync can fill them in
+     later; until then those two legitimately read as absent. Job value does
+     not, and never should have. */
   customFieldNames: {
-    jobValue: "Job Value (QB)",
+    jobValue: "$Value",
     jobCost: "Job Cost (QB)",
     leadReceivedAt: "Lead Received (Gmail)"
   },

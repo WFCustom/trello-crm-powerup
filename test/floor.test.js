@@ -304,6 +304,49 @@ test("status: behind beats running, and an unstaffed station is Open with its qu
   assert.equal(unset.queue.length, 0);
 });
 
+test("a finished job leaves the station whether or not approvals still exist", () => {
+  /* THE REGRESSION THIS EXISTS FOR.
+   *
+   * The station queues used to read `pendingApproval` at four separate points
+   * to mean "finished, hide it". That quietly made the shop floor depend on the
+   * approval model: the moment approvals are retired and that flag stops being
+   * written, finished jobs never leave a bench, every station fills with work
+   * nobody can clear, and nothing anywhere reports a problem.
+   *
+   * Both spellings of "done" must clear the station, so the floor keeps working
+   * during the migration and after it.
+   */
+  const { T } = boot();
+  const s = ONE_STATION.stations[0];
+
+  const oldWay = job("B", "LA", { claimed: KEV, running: true, pendingApproval: true });
+  assert.equal(T.stationState(BOARD, [oldWay], s).job, null, "pendingApproval clears it");
+
+  const newWay = job("C", "LA", { claimed: KEV, running: true });
+  newWay.phaseWork.completedAt = new Date().toISOString();
+  assert.equal(T.stationState(BOARD, [newWay], s).job, null, "completedAt clears it too");
+
+  // And a job that is genuinely still being worked stays put.
+  const live = job("D", "LA", { claimed: KEV, running: true });
+  assert.equal(T.stationState(BOARD, [live], s).job.id, "D");
+
+  // The predicate is asked once rather than spelled out at each call site --
+  // four copies of this rule is how it came to be forgotten in the first place.
+  assert.equal(T.isFinished({ completedAt: "2026-09-16T00:00:00Z" }), true);
+  assert.equal(T.isFinished({ pendingApproval: true }), true);
+  assert.equal(T.isFinished({ claimedBy: KEV, segments: [] }), false);
+  assert.equal(T.isFinished(null), false);
+});
+
+test("a finished job is not offered to the assign view either", () => {
+  const { T } = boot();
+  const done = job("B", "LA", { claimed: KEV });
+  done.phaseWork.completedAt = new Date().toISOString();
+  done.phaseWork.tableId = null;
+  const pool = T.unassignedInPhase(BOARD, [done], "Assemble Legacy");
+  assert.equal(pool.length, 0, "finished work is not unassigned work");
+});
+
 test("work left over from an earlier phase is ignored", () => {
   const { T } = boot();
   const stale = job("B", "LA", { claimed: KEV, running: true });
