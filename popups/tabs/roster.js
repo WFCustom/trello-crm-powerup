@@ -8,6 +8,11 @@
 
   function label(m) { return (m.fullName || m.username); }
 
+  /* Which section of the rail you were last on. Module-level so it survives
+     leaving the tab and coming back -- the whole point of the rail is that you
+     do not have to go looking for the thing you were working on. */
+  var section = "crew";
+
   /* What each role gets, spelled out in the UI so it isn't guesswork.
      Roles are editable here at any time and take effect on the next render --
      no reopening the window. */
@@ -133,9 +138,7 @@
    * the owner decides what "shop manager" means at this company rather than
    * inheriting what it meant at mine.
    */
-  function permsBlock(ctx, perms) {
-    var cfg = JSON.parse(JSON.stringify(perms));
-    var wrap = O.el("div");
+  function permsPane(ctx, cfg) {
     var note = O.el("div.hint", { style: "margin-top:8px" });
 
     var chosen = O.el("select", { style: "width:auto;padding:6px 10px;border-radius:9px" });
@@ -199,21 +202,18 @@
     chosen.addEventListener("change", function () { paintGrid(); note.textContent = ""; });
     paintGrid();
 
-    return O.el("div.phase-block", null,
-      O.el("div", { style: "display:flex;align-items:center;gap:10px;flex-wrap:wrap" },
-        O.el("h3", { style: "margin:0", text: "What each group can do" }),
+    return O.el("div", null,
+      O.el("div", {
+        style: "display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px"
+      },
+        O.el("label", { style: "margin:0", text: "Group" }),
         chosen),
-      O.el("div.hint", { style: "margin-top:6px", text:
+      O.el("div.hint", { style: "margin-bottom:10px", text:
         "This decides what people are shown, not what a determined person could " +
         "extract from a browser. Trello's own board permissions are the real " +
         "enforcement — treat this as focus, not a lock." }),
       grid,
-      note,
-      O.el("div", { style: "margin-top:12px" },
-        O.btn("Save permissions", {
-          primary: true, busyText: "Saving…",
-          onClick: function () { return WFPerms.save(ctx.t, cfg).then(ctx.reload); }
-        })));
+      note);
   }
 
   /** Say so out loud when the guard has put something back. */
@@ -239,8 +239,7 @@
    * grants is a rare one, and putting both on the same screen makes the rare
    * one look routine.
    */
-  function peoplePerms(ctx, perms, members) {
-    var cfg = JSON.parse(JSON.stringify(perms));
+  function peoplePane(ctx, cfg, members) {
     var rows = O.el("div");
 
     members.forEach(function (m) {
@@ -270,17 +269,79 @@
         O.el("div.wf-actions", null, tags)));
     });
 
-    return O.el("div.phase-block", null,
-      O.el("h3", { style: "margin:0", text: "Who is in which group" }),
-      O.el("div.hint", { style: "margin-top:6px", text:
+    return O.el("div", null,
+      O.el("div.hint", { style: "margin-bottom:10px", text:
         "People named as managers in config.js always hold everything — that is " +
         "the floor that makes a bad save recoverable, and it can't be switched " +
         "off from here." }),
-      rows,
-      O.el("div", { style: "margin-top:12px" },
-        O.btn("Save groups", {
+      rows);
+  }
+
+  /**
+   * Access: one block, two views of the same thing.
+   *
+   * Access Levels answers "who is in which group", Permissions answers "what
+   * that group can do". They were two panels side by side, which made them look
+   * like unrelated settings when they are two halves of one sentence -- and it
+   * meant two Save buttons over one record, so saving one could quietly discard
+   * an unsaved edit in the other.
+   *
+   * Now: one working copy, one Save, and a tab strip. Whichever tab you are on,
+   * you are editing the same draft.
+   */
+  function accessBlock(ctx, perms, members) {
+    var cfg = JSON.parse(JSON.stringify(perms));
+    var body = O.el("div");
+
+    var TABS = [
+      { id: "levels", label: "Access Levels",
+        build: function () { return peoplePane(ctx, cfg, members); } },
+      { id: "perms", label: "Permissions",
+        build: function () { return permsPane(ctx, cfg); } }
+    ];
+
+    var strip = O.el("div", {
+      style: "display:flex;gap:6px;margin:0 0 14px;padding:4px;border-radius:999px;" +
+             "background:var(--wf-band);align-self:flex-start"
+    });
+
+    var current = "levels";
+    function show(id) {
+      current = id;
+      Array.prototype.forEach.call(strip.children, function (b) {
+        b.classList.toggle("is-active", b.getAttribute("data-tab") === id);
+      });
+      body.innerHTML = "";
+      body.appendChild(TABS.filter(function (t) { return t.id === id; })[0].build());
+    }
+
+    TABS.forEach(function (t) {
+      var b = O.el("button.wf-tab", { type: "button", text: t.label });
+      b.setAttribute("data-tab", t.id);
+      b.addEventListener("click", function () { show(t.id); });
+      strip.appendChild(b);
+    });
+
+    var saved = O.el("span.hint");
+    show(current);
+
+    return O.el("div.phase-block", null,
+      O.el("div", { style: "display:flex;align-items:center;gap:12px;flex-wrap:wrap" },
+        O.el("h3", { style: "margin:0", text: "Access" }),
+        saved),
+      O.el("div", { style: "display:flex;flex-direction:column" }, strip),
+      body,
+      O.el("div", { style: "margin-top:14px" },
+        O.btn("Save access", {
           primary: true, busyText: "Saving…",
-          onClick: function () { return WFPerms.save(ctx.t, cfg).then(ctx.reload); }
+          // One save for both tabs, because both edit the same record. Two
+          // buttons over one record is how an unsaved edit gets thrown away.
+          onClick: function () {
+            return WFPerms.save(ctx.t, cfg).then(function () {
+              saved.textContent = "Saved";
+              return ctx.reload();
+            });
+          }
         })));
   }
 
@@ -488,6 +549,89 @@
           return out;
         };
 
+        // One block per phase, not per list -- the four Install lists share a
+        // single Install block with one crew. See WFOps.workPhases.
+        var phases = O.workPhases(ctx.boardCfg);
+
+        var qcPhases = phases.filter(function (p) { return WFQC.needsChecklist(p.name); });
+        var phaseNames = {};
+        qcPhases.forEach(function (p) { phaseNames[p.name] = true; });
+        var extras = Object.keys(qcTemplates).filter(function (n) { return !phaseNames[n]; }).sort();
+
+        /* ================================================== the sections
+         *
+         * Four things live here and only two of them are about people. Stacked
+         * down one page it was a long scroll past a slew of semi-related
+         * settings to reach whichever one you actually came for -- and the
+         * checklist library, which is edited often, sat at the bottom.
+         *
+         * A rail that swaps the screen, same as the EOS tab: you land on the
+         * crew, and everything else is one click rather than a scroll.
+         */
+        var SECTIONS = [
+          {
+            id: "crew", label: "Crew",
+            count: members.length + (members.length === 1 ? " person" : " people"),
+            build: function () {
+              var people = O.panel("Everyone on the board",
+                Object.keys(rates).length
+                  ? "rates synced from QuickBooks" + (syncedAt ? " · " + syncedAt[1].trim() : "")
+                  : "no QuickBooks rates synced yet");
+              people.body(O.el("div.wf-cards", { style: "margin:0" }, members.map(function (m) {
+                return personRow(ctx, m, rates[m.username],
+                  WFRoster.roleOf(ctx.roster, m.username), phasesFor(m.username));
+              })));
+              return people;
+            }
+          },
+          {
+            id: "phases", label: "Who does what",
+            count: phases.length + " work phases",
+            build: function () {
+              if (!phases.length) {
+                return O.empty("No work phases configured for this board yet.");
+              }
+              var grid = O.el("div.wf-panels.halves");
+              phases.forEach(function (p) { grid.appendChild(phaseBlock(ctx, p, members)); });
+              return grid;
+            }
+          },
+          {
+            id: "checklists", label: "Checklists",
+            count: (qcPhases.length + extras.length) + " lists",
+            build: function () {
+              var wrap = O.el("div", null,
+                O.el("p.muted", { style: "margin:0 0 12px", text:
+                  "A station works the list whose name matches its checklist setting, its " +
+                  "phase, or its kind — so a list called \"Powder booth\" is picked up by " +
+                  "the powder booth without touching its setup. Editing a list never " +
+                  "changes a check somebody already signed." }),
+                newChecklistRow(ctx, qcTemplates));
+              var qcGrid = O.el("div.wf-panels.halves");
+              qcPhases.forEach(function (p) {
+                qcGrid.appendChild(qcTemplateBlock(ctx, p, qcTemplates));
+              });
+              extras.forEach(function (n) {
+                qcGrid.appendChild(qcTemplateBlock(ctx, { name: n, custom: true }, qcTemplates));
+              });
+              wrap.appendChild(qcGrid);
+              return wrap;
+            }
+          }
+        ];
+
+        /* Access is gated on the capability rather than on a role, so the
+           screen that decides who can do what is governed by the same answer it
+           gives. Absent entirely for anyone without it -- a locked tab still
+           tells you the setting exists and that you are not trusted with it. */
+        if (ctx.can && ctx.can("permissions.manage") && ctx.perms) {
+          SECTIONS.push({
+            id: "access", label: "Access",
+            count: WFPerms.presetIds(ctx.perms).length + " groups",
+            build: function () { return accessBlock(ctx, ctx.perms, members); }
+          });
+        }
+
         var head = O.el("div.wf-pagehead", null,
           O.el("div.wf-h1", { text: "Who's on the crew" }),
           O.el("div.wf-sub", {
@@ -495,82 +639,39 @@
                   (managers.length === 1 ? " manager" : " managers")
           }));
 
-        var people = O.panel("Everyone on the board",
-          Object.keys(rates).length
-            ? "rates synced from QuickBooks" + (syncedAt ? " · " + syncedAt[1].trim() : "")
-            : "no QuickBooks rates synced yet");
-        people.body(O.el("div.wf-cards", { style: "margin:0" }, members.map(function (m) {
-          return personRow(ctx, m, rates[m.username],
-            WFRoster.roleOf(ctx.roster, m.username), phasesFor(m.username));
-        })));
-
-        var out = O.el("div", null, head, people);
-
-        // One block per phase, not per list -- the four Install lists share a
-        // single Install block with one crew. See WFOps.workPhases.
-        var phases = O.workPhases(ctx.boardCfg);
-
-        out.appendChild(O.el("div.wf-group-h", { style: "margin-top:28px" },
-          O.el("div.wf-group-t", { text: "Who does what" }),
-          O.el("span.wf-group-n", { text: phases.length + " work phases" })));
-
-        if (phases.length) {
-          var grid = O.el("div.wf-panels.halves", { style: "margin-bottom:20px" });
-          phases.forEach(function (p) { grid.appendChild(phaseBlock(ctx, p, members)); });
-          out.appendChild(grid);
-        } else {
-          out.appendChild(O.empty("No work phases configured for this board yet."));
-        }
-
-        /* THE CHECKLIST LIBRARY.
-           Every list on the board, whatever it is called. Phases that carry a
-           check are shown whether or not anybody has written one yet, so the
-           starting drafts are visible; everything else is a list somebody made
-           here, and making one takes no code. Stations pick a list by name. */
-        var qcPhases = phases.filter(function (p) { return WFQC.needsChecklist(p.name); });
-        var phaseNames = {};
-        qcPhases.forEach(function (p) { phaseNames[p.name] = true; });
-        var extras = Object.keys(qcTemplates).filter(function (n) { return !phaseNames[n]; }).sort();
-
-        out.appendChild(O.el("div.wf-group-h", { style: "margin-top:28px" },
-          O.el("div.wf-group-t", { text: "Quality checklists" }),
-          O.el("span.wf-group-n", {
-            text: (qcPhases.length + extras.length) + " lists · used by name"
-          })));
-
-        out.appendChild(O.el("p.muted", { style: "margin:0 0 12px", text:
-          "A station works the list whose name matches its checklist setting, its " +
-          "phase, or its kind — so a list called \"Powder booth\" is picked up by " +
-          "the powder booth without touching its setup. Editing a list never " +
-          "changes a check somebody already signed." }));
-
-        out.appendChild(newChecklistRow(ctx, qcTemplates));
-
-        var qcGrid = O.el("div.wf-panels.halves", { style: "margin-bottom:20px" });
-        qcPhases.forEach(function (p) { qcGrid.appendChild(qcTemplateBlock(ctx, p, qcTemplates)); });
-        extras.forEach(function (n) {
-          qcGrid.appendChild(qcTemplateBlock(ctx, { name: n, custom: true }, qcTemplates));
+        var rail = O.el("div.wf-tabbar", {
+          style: "background:transparent;padding:0 0 16px;gap:8px;flex-wrap:wrap"
         });
-        out.appendChild(qcGrid);
+        var pane = O.el("div");
 
-        /* Permissions, for whoever holds the key to them. Gated on the
-           capability rather than on a role, so the screen that decides who can
-           do what is itself governed by the same answer. */
-        if (ctx.can && ctx.can("permissions.manage") && ctx.perms) {
-          out.appendChild(O.el("div.wf-group-h", { style: "margin-top:28px" },
-            O.el("div.wf-group-t", { text: "Who sees what" }),
-            O.el("span.wf-group-n", {
-              text: WFPerms.presetIds(ctx.perms).length + " groups · " +
-                    WFPerms.caps().length + " things to grant"
-            })));
-          var permGrid = O.el("div.wf-panels.halves", { style: "margin-bottom:20px" });
-          permGrid.appendChild(permsBlock(ctx, ctx.perms));
-          permGrid.appendChild(peoplePerms(ctx, ctx.perms, members));
-          out.appendChild(permGrid);
+        function show(id) {
+          section = id;
+          Array.prototype.forEach.call(rail.children, function (b) {
+            b.classList.toggle("is-active", b.getAttribute("data-sec") === id);
+          });
+          pane.innerHTML = "";
+          var s = SECTIONS.filter(function (x) { return x.id === id; })[0] || SECTIONS[0];
+          pane.appendChild(s.build());
         }
 
-        out.appendChild(O.el("p.muted", { text:
-          "Managers and specialists save to this board, so every board can have its own crew. " +
+        SECTIONS.forEach(function (s) {
+          var b = O.el("button.wf-tab", { type: "button" },
+            O.el("span", { text: s.label }),
+            O.el("span.wf-group-n", { style: "font-size:11px;padding:1px 8px", text: s.count }));
+          b.setAttribute("data-sec", s.id);
+          b.addEventListener("click", function () { show(s.id); });
+          rail.appendChild(b);
+        });
+
+        var out = O.el("div", null, head, rail, pane);
+
+        // Come back to the section you were last on. Managers live in one of
+        // these four and bouncing them to Crew every time is the same friction
+        // the rail was meant to remove.
+        show(SECTIONS.some(function (s) { return s.id === section; }) ? section : SECTIONS[0].id);
+
+        out.appendChild(O.el("p.muted", { style: "margin-top:24px", text:
+          "Everything here saves to this board, so every board can have its own crew. " +
           "Hourly rates are owned by the QuickBooks sync — change them there, not here." }));
 
         return out;
