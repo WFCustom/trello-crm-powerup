@@ -26,6 +26,7 @@ const ROOT = path.join(__dirname, "..");
 /** The script order popups/ops.html uses, minus the CDN and Trello SDK tags. */
 const LOAD_ORDER = [
   "config.js",
+  "lib/sandbox.js",
   "lib/board-extras.js",
   "lib/stage.js",
   "lib/trello-rest.js",

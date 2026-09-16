@@ -97,6 +97,9 @@ function boot({ role = "worker", cards = [], saved = null } = {}) {
   win.WFPricing = { getBoardAudit: () => Promise.resolve([]) };
   win.Chart = function () {};
 
+  // The Floor writes now, so it needs the state machine and the checklists.
+  win.eval(read("lib/phase.js"));
+  win.eval(read("lib/qc.js"));
   win.eval(read("lib/tables.js"));
   win.eval(read("lib/cardview.js"));
   win.eval(read("popups/ops.js"));
@@ -336,7 +339,7 @@ test("A WORKER NEVER SEES A RUNNING TIMER", async () => {
 
   // What they do get.
   assert.match(columns, /In progress/);
-  assert.match(columns, /40% complete/);
+  assert.match(columns, /40%\s*running/);
   assert.match(columns, /Station #1/);
 });
 
@@ -405,7 +408,8 @@ test("a late queued job is called out; an empty queue says what it's waiting on"
   const tile = node.querySelector(".wf-fl-t");
   assert.ok(tile.classList.contains("is-late"));
   assert.match(textOf(tile), /was due/);
-  assert.match(textOf(node), /No active job/);
+  assert.match(textOf(node), /Open/);
+  assert.match(textOf(node), /Assign a job to this station/);
 
   const empty = boot({ role: "worker", saved: ONE_STATION, cards: [] });
   const n2 = await render(empty, 1280);
@@ -456,7 +460,11 @@ test("saving stations writes config and nothing else", async () => {
     .dispatchEvent(new env.win.Event("click"));
   await new Promise((r) => setTimeout(r, 0));
 
-  assert.equal(env.written.length, 1, "one write");
+  assert.ok(env.written.some((w) => w[0] === "wfStations"), "the station config");
+  // Saving also persists each station's QC checklist, which is edited in the
+  // same dialog -- one trip for the manager, several small writes underneath.
+  assert.ok(env.written.every((w) => w[0] === "wfStations" || w[0] === "wfQcChecklists"),
+    "nothing but configuration is written");
   assert.equal(env.written[0][0], "wfStations", "and it's configuration");
   assert.ok(Array.isArray(env.written[0][1].stations));
 });
@@ -473,11 +481,9 @@ test("a running job shows the three icon buttons, with the card one live", async
 
   const icons = $(node, ".wf-fl-ic");
   assert.equal(icons.length, 3, "assign, QC, card");
-  // Assign and QC write, and land with Start/Stop. They are drawn disabled
-  // rather than left out so the shop learns where they will be.
-  assert.equal(icons[0].disabled, true);
-  assert.equal(icons[1].disabled, true);
-  assert.equal(icons[2].disabled, false, "the card button works today");
+  icons.forEach((b) => assert.equal(b.disabled, false, "all three are live"));
+  assert.match(icons[0].getAttribute("title"), /assign/i);
+  assert.match(icons[1].getAttribute("title"), /QC/i);
   assert.match(icons[2].getAttribute("title"), /card/i);
 });
 
@@ -538,7 +544,7 @@ test("a station still draws when the card can't be read at all", async () => {
   const node = await render(env, 1280);
   await new Promise((r) => setTimeout(r, 0));
   assert.match(textOf(node), /Station #1/);
-  assert.match(textOf(node), /40% complete/);
+  assert.match(textOf(node), /40%/);
   assert.equal($(node, ".wf-fl-cover").length, 0);
 });
 
@@ -549,17 +555,20 @@ test("the card view takes over the column and the X gives it back", async () => 
     cards: [job("B", "LA", { claimed: KEV, running: true, pct: 40 })]
   });
   const node = await render(env, 1280);
-  const col = $(node, '[data-station="s1"]')[0];
+  let col = $(node, '[data-station="s1"]')[0];
 
   $(node, ".wf-fl-ic")[2].dispatchEvent(new env.win.Event("click"));
+  // The column is replaced, not mutated, so re-find it.
+  col = $(node, '[data-station="s1"]')[0];
   assert.ok(col.classList.contains("is-card"));
   assert.equal($(col, ".wf-cp").length, 1, "the card panel is in the column");
   assert.ok(!/40% complete/.test(textOf(col)), "the station view is put away");
 
   // The mockup's rule: the X returns to Station without leaving the column.
   $(col, ".wf-cp-x")[0].dispatchEvent(new env.win.Event("click"));
+  col = $(node, '[data-station="s1"]')[0];
   assert.ok(!col.classList.contains("is-card"));
-  assert.match(textOf(col), /40% complete/);
+  assert.match(textOf(col), /40%/);
   assert.match(textOf(col), /Station #1/);
 });
 
@@ -578,5 +587,211 @@ test("a queued job opens its own card in the same column", async () => {
 
   tiles[0].dispatchEvent(new env.win.Event("click"));
   const col = $(node, '[data-station="s1"]')[0];
-  assert.ok(col.classList.contains("is-card"));
+  // Tapping a queued job on a BUSY station now asks before switching, rather
+  // than opening the card -- that is the mock's switch dialog.
+  assert.match(textOf(env.win.document.body), /Pause .* and start/);
+  assert.ok(!col.classList.contains("is-card"));
+});
+
+/* ========================================== one view at a time, in the column */
+
+test("opening a view replaces the station and the X gives it back", async () => {
+  const env = boot({
+    role: "worker",
+    saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true, pct: 40 })]
+  });
+  const node = await render(env, 1280);
+
+  // QC is the second icon.
+  $(node, ".wf-fl-ic")[1].dispatchEvent(new env.win.Event("click"));
+  let col = $(node, '[data-station="s1"]')[0];
+  assert.match(textOf(col), /QC checklist/);
+  assert.ok(!/Now building/.test(textOf(col)), "the station view is put away, not pushed down");
+
+  $(col, ".wf-fl-vx")[0].dispatchEvent(new env.win.Event("click"));
+  col = $(node, '[data-station="s1"]')[0];
+  assert.match(textOf(col), /Now building/);
+  assert.ok(!/QC checklist/.test(textOf(col)));
+});
+
+test("only one view is ever open in a column", async () => {
+  const env = boot({
+    role: "worker",
+    saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  const node = await render(env, 1280);
+
+  $(node, ".wf-fl-ic")[0].dispatchEvent(new env.win.Event("click"));   // assign
+  let col = $(node, '[data-station="s1"]')[0];
+  assert.match(textOf(col), /Assign to/);
+
+  $(node, '[data-station="s1"]');
+  // There is no arrangement in which two of these should be on screen at once.
+  assert.equal($(col, ".wf-fl-vh-t").length, 1);
+});
+
+test("one column's view doesn't disturb its neighbour", async () => {
+  const env = boot({
+    role: "worker",
+    saved: {
+      stations: [
+        { id: "s1", area: "shop", table: "Station #1", station: "Welding", welder: "kevinmoss", phase: "Assemble Legacy" },
+        { id: "s2", area: "shop", table: "Station #2", station: "Welding", welder: "scottv", phase: "Assemble CAP" }
+      ],
+      visible: ["s1", "s2"]
+    },
+    cards: [
+      job("B", "LA", { claimed: KEV, running: true }),
+      job("C", "LB", { claimed: SCOTT, running: true })
+    ]
+  });
+  const node = await render(env, 1280);
+
+  $($(node, '[data-station="s1"]')[0], ".wf-fl-ic")[1]
+    .dispatchEvent(new env.win.Event("click"));
+
+  assert.match(textOf($(node, '[data-station="s1"]')[0]), /QC checklist/);
+  assert.match(textOf($(node, '[data-station="s2"]')[0]), /Now building/);
+});
+
+/* ================================================ start, stop, percent, gate */
+
+test("the percent slider is there for a claimed job and absent otherwise", async () => {
+  const claimed = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true, pct: 40 })]
+  });
+  assert.equal($(await render(claimed, 1280), ".wf-fl-slider").length, 1);
+
+  const open = boot({ role: "worker", saved: ONE_STATION, cards: [job("C", "LA")] });
+  assert.equal($(await render(open, 1280), ".wf-fl-slider").length, 0);
+});
+
+test("Start and Stop read the job's real state", async () => {
+  const running = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  assert.match(textOf(await render(running, 1280), ), /Stop/);
+
+  const paused = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV })]
+  });
+  assert.match(textOf(await render(paused, 1280)), /Start/);
+});
+
+test("Complete is an outline button until QC is signed, solid after", async () => {
+  const unsigned = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  let node = await render(unsigned, 1280);
+  let done = $(node, ".wf-fl-done")[0];
+  assert.ok(!done.classList.contains("is-on"), "not signed, not green");
+
+  const card = job("B", "LA", { claimed: KEV, running: true });
+  card.qcRecord = {
+    listId: "LA", status: "passed", signedAt: new Date().toISOString(),
+    signature: "Kevin Moss", signedBy: KEV
+  };
+  const signed = boot({ role: "worker", saved: ONE_STATION, cards: [card] });
+  node = await render(signed, 1280);
+  done = $(node, ".wf-fl-done")[0];
+  assert.ok(done.classList.contains("is-on"), "signed, green");
+  assert.equal($(node, ".wf-fl-ic")[1].className.indexOf("is-passed") > -1, true,
+    "and the QC icon says so from across the shop");
+});
+
+test("Complete on an unsigned job opens the checklist rather than refusing", async () => {
+  // The forced checklist IS the gate. Refusing would teach the shop to avoid
+  // the button; opening it teaches them what the button needs.
+  const env = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  const node = await render(env, 1280);
+  $(node, ".wf-fl-done")[0].dispatchEvent(new env.win.Event("click"));
+
+  const col = $(node, '[data-station="s1"]')[0];
+  assert.match(textOf(col), /QC checklist/);
+  assert.equal(env.written.length, 0, "and nothing was written");
+});
+
+test("the checklist carries its tolerances and starts unticked", async () => {
+  const env = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  const node = await render(env, 1280);
+  $(node, ".wf-fl-ic")[1].dispatchEvent(new env.win.Event("click"));
+  await new Promise((r) => setTimeout(r, 0));
+
+  const col = $(node, '[data-station="s1"]')[0];
+  const rows = $(col, ".wf-fl-ck");
+  assert.ok(rows.length >= 5, "the shipped Assemble draft");
+  assert.ok(rows.every((r) => !r.classList.contains("is-on")), "nothing pre-ticked");
+  assert.ok($(col, ".wf-fl-ck-s").length >= 1, "tolerances under the lines");
+  assert.match(textOf(col), /items remaining/);
+});
+
+test("a job already signed shows the stamp instead of the checklist", async () => {
+  const card = job("B", "LA", { claimed: KEV, running: true });
+  card.qcRecord = {
+    listId: "LA", status: "passed", signedAt: new Date().toISOString(),
+    signature: "Kevin Moss", signedBy: SCOTT,
+    rounds: [{ items: [{ text: "Frame is square", spec: "Diagonals within 1/8″" }] }]
+  };
+  const env = boot({ role: "worker", saved: ONE_STATION, cards: [card] });
+  const node = await render(env, 1280);
+  $(node, ".wf-fl-ic")[1].dispatchEvent(new env.win.Event("click"));
+
+  const col = $(node, '[data-station="s1"]')[0];
+  assert.match(textOf(col), /QC passed/);
+  assert.match(textOf(col), /Scott VanWorkom/, "who actually looked at it");
+});
+
+/* ================================================================== assign */
+
+test("assign offers the phase's unstationed jobs, not somebody else's queue", async () => {
+  const mine = job("Q", "LA", { pos: 10, name: "#2444 free job" });
+  const theirs = job("R", "LA", { pos: 20, name: "#2455 on another bench" });
+  theirs.phaseWork = { listId: "LA", claimedBy: null, segments: [], tableId: "s9" };
+
+  const env = boot({ role: "worker", saved: ONE_STATION, cards: [mine, theirs] });
+  const node = await render(env, 1280);
+  $(node, ".wf-fl-assign")[0].dispatchEvent(new env.win.Event("click"));
+
+  const col = $(node, '[data-station="s1"]')[0];
+  assert.match(textOf(col), /#2444 free job/);
+  assert.ok(!/on another bench/.test(textOf(col)),
+    "taking a job off someone else's bench without telling them is not assigning");
+});
+
+/* ============================================================ the switch */
+
+test("tapping a queued job on an open station starts it; on a busy one it asks", async () => {
+  const openEnv = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("Q", "LA", { pos: 10 })]
+  });
+  let node = await render(openEnv, 1280);
+  assert.match(textOf(node), /Tap a job to start/);
+
+  const busyEnv = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true, pct: 65 }), job("Q", "LA", { pos: 10 })]
+  });
+  node = await render(busyEnv, 1280);
+  assert.match(textOf(node), /Tap a job to switch/);
+
+  $(node, "button.wf-fl-t")[0].dispatchEvent(new busyEnv.win.Event("click"));
+  const body = textOf(busyEnv.win.document.body);
+  assert.match(body, /Pause .* and start/);
+  // The percentage has to be in the question: silently pausing somebody's work
+  // is the kind of surprise that makes a shop stop trusting a screen.
+  assert.match(body, /65%/);
+  assert.equal(busyEnv.written.length, 0, "nothing happens until they answer");
 });

@@ -563,7 +563,11 @@
             c.economics.valueFrom = WFPricing.fieldName();
           }
         });
-        return key === "open" ? overlayPhaseState(list) : list;
+        // Test mode last: getBoardCardsFull reads what Trello has, which by
+        // design is not what this session has done. Without this the screen
+        // would forget every change the moment it repainted.
+        return Promise.resolve(key === "open" ? overlayPhaseState(list) : list)
+          .then(function (out) { return WFSandbox.decorate(out); });
       });
     }
     return cardCache[key];
@@ -883,7 +887,7 @@
     return renderActive();
   }
 
-  /** Manager-only control for stepping into someone else's shoes. */
+  /** Manager-only controls: step into someone's shoes, and cut the wire. */
   function paintSandbox() {
     var slot = document.getElementById("syncNote");
     if (!slot) return;
@@ -902,23 +906,148 @@
     });
     sel.addEventListener("change", function () { setActingAs(sel.value); });
     slot.appendChild(sel);
+
+    slot.appendChild(btn(WFSandbox.active() ? "Leave test mode" : "Test mode", {
+      small: true,
+      onClick: function () {
+        if (WFSandbox.active()) return leaveSandbox();
+        return enterSandbox();
+      }
+    }));
   }
 
+  /* -------------------------------------------------------- write-free mode */
+
+  /**
+   * Test mode: the real code path, with the last inch to Trello cut.
+   *
+   * Swapping ctx.t for the wrapper is the whole mechanism on this side -- every
+   * tab already reads and writes through ctx.t, so none of them needs to know.
+   * The re-render is what makes it take effect everywhere at once rather than
+   * on whichever tab you happen to open next.
+   */
+  function enterSandbox() {
+    WFSandbox.enable();
+    ctx.t = WFSandbox.wrap(realT());
+    cardCache = {};
+    paintSandbox();
+    paintSandboxBanner();
+    return reload();
+  }
+
+  /**
+   * Leave, and throw the session away.
+   *
+   * The card cache has to go with it. It is full of a session that never
+   * happened, and serving one card of it after the banner came down would be
+   * the worst possible outcome of a feature whose entire promise is that you
+   * can tell the difference.
+   */
+  function leaveSandbox() {
+    WFSandbox.disable();
+    ctx.t = realT();
+    cardCache = {};
+    paintSandbox();
+    paintSandboxBanner();
+    return reload();
+  }
+
+  /** The unwrapped `t`, whether or not we are currently wrapped. */
+  function realT() { return (ctx.t && ctx.t.__real) || t; }
+
+  /** Everything this session would have sent to Trello, in plain words. */
+  function openSandboxLog() {
+    var items = WFSandbox.entries().filter(function (e) { return e.kind !== "session"; });
+    var body = el("div");
+
+    if (!items.length) {
+      body.appendChild(el("div.muted", {
+        text: "Nothing yet. Start a job, move a slider, sign off a check — " +
+              "everything you do lands here instead of on the board."
+      }));
+    }
+
+    items.slice().reverse().forEach(function (e) {
+      body.appendChild(el("div", {
+        style: "display:flex;gap:10px;align-items:baseline;padding:7px 0;" +
+               "border-bottom:1px solid var(--wf-line)"
+      },
+        el("span", {
+          text: e.kind === "trello" ? "Trello" : "Data",
+          style: "flex:0 0 52px;font-size:10px;letter-spacing:.07em;text-transform:uppercase;" +
+                 "font-weight:800;color:" + (e.kind === "trello" ? "var(--wf-ember)" : "var(--wf-muted)")
+        }),
+        el("span", { text: e.summary, style: "font-size:13.5px" }),
+        el("span", {
+          text: new Date(e.at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" }),
+          style: "margin-left:auto;font-size:11.5px;color:var(--wf-muted);white-space:nowrap"
+        })));
+    });
+
+    dialog({
+      title: "What this session would have changed",
+      note: items.length
+        ? items.length + (items.length === 1 ? " change" : " changes") +
+          ", newest first. None of it reached the board."
+        : "",
+      content: body,
+      buttons: [{
+        label: "Start the run again", quiet: true,
+        onClick: function () { WFSandbox.reset(); cardCache = {}; paintSandboxBanner(); return reload(); }
+      }]
+    });
+  }
+
+  /**
+   * The banner, covering both kinds of pretending.
+   *
+   * They are genuinely different and must not read as one thing: acting as
+   * someone else writes for real against their name, while test mode writes
+   * nowhere at all. Somebody who mixes those two up either thinks a rehearsal
+   * was real or thinks a real change was a rehearsal. So test mode gets the
+   * louder colour and the blunter sentence, and when both are on the banner
+   * says both.
+   */
   function paintSandboxBanner() {
     var existing = document.getElementById("wfSandboxBanner");
     if (existing) existing.parentNode.removeChild(existing);
-    if (!actingAs) return;
+    var testing = WFSandbox.active();
+    if (!actingAs && !testing) return;
     var shell = document.querySelector(".wf-shell");
     if (!shell) return;
+
+    var words = testing
+      ? "Test mode — nothing you do here reaches the Trello board."
+      : "Sandbox — you are acting as " + displayName(actingAs) +
+        ". Anything you do is recorded against them.";
+    if (testing && actingAs) {
+      words = "Test mode, acting as " + displayName(actingAs) +
+              " — nothing you do here reaches the Trello board.";
+    }
+
     var bar = el("div#wfSandboxBanner", {
-      style: "background:var(--wf-ember);color:#fff;padding:9px 24px;font-size:13.5px;" +
-             "font-weight:600;display:flex;align-items:center;gap:14px"
-    },
-      el("span", { text: "Sandbox — you are acting as " + displayName(actingAs) +
-                         ". Anything you do is recorded against them." }),
-      btn("Stop", { small: true, quiet: true, onClick: function () { setActingAs(""); } }));
-    bar.lastChild.style.color = "#fff";
-    bar.lastChild.style.borderColor = "rgba(255,255,255,.5)";
+      style: "background:" + (testing ? "#6b21a8" : "var(--wf-ember)") + ";color:#fff;" +
+             "padding:9px 24px;font-size:13.5px;font-weight:600;display:flex;" +
+             "align-items:center;gap:12px;flex-wrap:wrap"
+    }, el("span", { text: words }));
+
+    if (testing) {
+      var n = WFSandbox.entries().filter(function (e) { return e.kind !== "session"; }).length;
+      bar.appendChild(btn(n ? "Show the " + n + " change" + (n === 1 ? "" : "s") : "Nothing changed yet", {
+        small: true, quiet: true, onClick: openSandboxLog
+      }));
+      bar.appendChild(btn("Leave test mode", { small: true, quiet: true, onClick: leaveSandbox }));
+    }
+    if (actingAs) {
+      bar.appendChild(btn("Stop acting as " + firstName(actingAs), {
+        small: true, quiet: true, onClick: function () { setActingAs(""); }
+      }));
+    }
+
+    Array.prototype.forEach.call(bar.querySelectorAll("button"), function (b) {
+      b.style.color = "#fff";
+      b.style.borderColor = "rgba(255,255,255,.5)";
+    });
     shell.insertBefore(bar, shell.firstChild.nextSibling);
   }
 
