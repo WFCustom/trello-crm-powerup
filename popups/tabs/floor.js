@@ -144,6 +144,13 @@
       ".wf-fl-gear:hover{background:rgba(255,255,255,.14);border-color:#fff}",
 
       ".wf-fl-ic.is-passed{background:var(--p-ok);border-color:var(--p-ok);color:#fff}",
+      ".wf-fl-svg{width:15px;height:15px;display:block}",
+      ".wf-fl-due{font:inherit;font-size:inherit;border:0;background:none;padding:0;",
+      "color:var(--p-muted);cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}",
+      ".wf-fl-due:hover{color:var(--p-ink)}",
+      ".wf-fl-due.is-late{color:var(--p-warn);font-weight:700}",
+      ".wf-fl-assign .wf-fl-svg{width:16px;height:16px}",
+      ".wf-fl-assign{display:inline-flex;align-items:center;gap:8px}",
 
       /* --- a view that has taken the column over ---------------------- */
       ".wf-fl-vh{display:flex;align-items:flex-start;gap:10px}",
@@ -200,6 +207,8 @@
       ".wf-fl-arow{display:flex;gap:8px;align-items:center;margin-top:4px}",
 
       /* --- QC checklist ------------------------------------------------ */
+      ".wf-fl-allrow{display:flex;gap:14px;align-items:center;flex-wrap:wrap;",
+      "padding:2px 0 4px;border-bottom:1px solid var(--p-track);margin-bottom:4px}",
       ".wf-fl-amber{background:#fdf0d5;border-left:4px solid var(--p-accent);color:#6b4a06;",
       "border-radius:10px;padding:9px 12px;font-size:12.5px;font-weight:600}",
       ".wf-fl-ck{display:flex;gap:10px;align-items:flex-start;background:transparent;",
@@ -545,26 +554,81 @@
     var row = O.el("div.wf-fl-icons");
     var signed = st.job ? WFQC.floorSignOff(st.job) : null;
 
-    row.appendChild(O.el("button.wf-fl-ic", {
+    var assign = O.el("button.wf-fl-ic", {
       type: "button", title: "Assign a job to this station", "aria-label": "Assign a job",
-      text: "⇲", onClick: function () { setView(st, "assign"); }
-    }));
+      onClick: function () { setView(st, "assign"); }
+    });
+    assign.appendChild(icon("person-plus"));
+    row.appendChild(assign);
 
-    row.appendChild(O.el("button.wf-fl-ic" + (signed ? ".is-passed" : ""), {
+    var qc = O.el("button.wf-fl-ic" + (signed ? ".is-passed" : ""), {
       type: "button",
       title: signed
         ? "QC passed · " + ((signed.signedBy && signed.signedBy.fullName) || signed.signature)
         : "QC checklist · sign off",
       "aria-label": "QC checklist",
-      text: "✓", onClick: function () { setView(st, "qc"); }
-    }));
+      onClick: function () { setView(st, "qc"); }
+    });
+    qc.appendChild(icon("clipboard-check"));
+    row.appendChild(qc);
 
-    row.appendChild(O.el("button.wf-fl-ic", {
+    var open = O.el("button.wf-fl-ic", {
       type: "button", title: "Open this card here", "aria-label": "Open the card",
-      text: "↗", onClick: function () { setView(st, "card"); }
-    }));
+      onClick: function () { setView(st, "card"); }
+    });
+    open.appendChild(icon("arrow-out"));
+    row.appendChild(open);
     return row;
   }
+
+  /**
+   * Line icons, drawn rather than typed.
+   *
+   * The first pass used whatever unicode glyph was closest -- "⇲" for assign --
+   * and it read as an arrow into a corner, not as a person. A glyph is at the
+   * mercy of whichever font the TV falls back to; an inline SVG is the same
+   * shape on every screen in the building. Lucide geometry, stroke 2.5, to
+   * match the mock.
+   */
+  function icon(name) {
+    var NS = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2.5");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("class", "wf-fl-svg");
+
+    (PATHS[name] || []).forEach(function (d) {
+      var p = document.createElementNS(NS, "path");
+      p.setAttribute("d", d);
+      svg.appendChild(p);
+    });
+    return svg;
+  }
+
+  var PATHS = {
+    // A head and shoulders with a plus -- Lucide user-plus. The mock's assign icon.
+    "person-plus": [
+      "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2",
+      "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+      "M19 8v6", "M22 11h-6"
+    ],
+    // A clipboard with a tick -- the QC checklist.
+    "clipboard-check": [
+      "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2",
+      "M9 2h6a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z",
+      "M9 14l2 2 4-4"
+    ],
+    // Out of the box -- open the card.
+    "arrow-out": [
+      "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6",
+      "M15 3h6v6", "M10 14L21 3"
+    ]
+  };
 
   /* --------------------------------------------------------- the station view */
 
@@ -611,12 +675,22 @@
       meta.appendChild(O.el("span.wf-fl-dot"));
       meta.appendChild(O.el("span", { text: st.phase }));
     }
-    var due = dueText(st.job);
-    if (due) {
-      meta.appendChild(O.el("span.wf-fl-dot"));
+    // The due date, and -- for whoever schedules -- a way to move it without
+    // leaving the station. A job going red on the shop floor is exactly when
+    // somebody wants to push the date, and making them open the card, scroll to
+    // the field and come back is how dates quietly stop being maintained.
+    var late = WFTables.isLate(st.job);
+    var due = dueText(st.job) || "no date set";
+    meta.appendChild(O.el("span.wf-fl-dot"));
+    if (canSchedule()) {
+      meta.appendChild(O.el("button.wf-fl-due" + (late ? ".is-late" : ""), {
+        type: "button", text: due + " · change",
+        title: "Move this job's due date",
+        onClick: function () { openDue(st); }
+      }));
+    } else {
       meta.appendChild(O.el("span", {
-        text: due,
-        style: WFTables.isLate(st.job) ? "color:var(--p-warn);font-weight:700" : ""
+        text: due, style: late ? "color:var(--p-warn);font-weight:700" : ""
       }));
     }
     box.appendChild(meta);
@@ -728,14 +802,81 @@
     return !!(w && w.claimedBy);
   }
 
+  /**
+   * Who may move a promise made to a customer.
+   *
+   * A due date is a commitment somebody else is planning around, so it stays
+   * with the people who schedule. A welder can see it has gone red and say so;
+   * they can't quietly buy themselves a week.
+   */
+  function canSchedule() {
+    return state.ctx.role === "manager" || state.ctx.role === "office";
+  }
+
+  /**
+   * Move a due date from the station.
+   *
+   * The quick buttons are there because the realistic answer to "this is going
+   * to be late" is almost always a few days, and a date picker for that is four
+   * interactions to say something you already knew. The picker stays for the
+   * cases where the real answer is a specific day.
+   */
+  function openDue(st) {
+    var card = st.job;
+    var base = card.due ? new Date(card.due) : new Date();
+    if (WFTables.isLate(card)) base = new Date();   // bump from today, not from the miss
+
+    var picker = O.el("input", {
+      type: "datetime-local",
+      style: "font:inherit;font-size:14px;padding:8px 10px;border-radius:10px;" +
+             "border:1px solid var(--wf-line);width:100%;box-sizing:border-box"
+    });
+    if (card.due) picker.value = WFCardPanel.toLocalInput(card.due);
+
+    var note = O.el("div.muted", { style: "font-size:12.5px;margin-top:8px" });
+    var quick = O.el("div", { style: "display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px" });
+    [["+1 day", 1], ["+3 days", 3], ["+1 week", 7], ["+2 weeks", 14]].forEach(function (p) {
+      quick.appendChild(O.btn(p[0], {
+        small: true,
+        onClick: function () {
+          var d = new Date(base.getTime() + p[1] * 86400000);
+          picker.value = WFCardPanel.toLocalInput(d.toISOString());
+          note.textContent = "New date: " + d.toLocaleString();
+        }
+      }));
+    });
+
+    O.dialog({
+      title: "Due date for " + (jobNumber(card) || jobTitle(card)),
+      note: card.due
+        ? (WFTables.isLate(card) ? "Past due " : "Currently due ") +
+          new Date(card.due).toLocaleString() +
+          ". Pushing from today, not from the date it missed."
+        : "This job has no due date, so nothing can be forecast for it.",
+      content: O.el("div", null, quick, picker, note),
+      buttons: [{
+        label: "Save the date", primary: true, busyText: "Saving…",
+        onClick: function () {
+          if (!picker.value) return;
+          return doWrite(st, function () {
+            return WFRest.updateCard(state.ctx.t, card.id,
+              { due: new Date(picker.value).toISOString() });
+          });
+        }
+      }]
+    });
+  }
+
   function idle(st) {
     var box = O.el("div.wf-fl-idle", null,
       O.el("b", { text: "Open" }),
       O.el("div", { text: st.note || "Nothing started yet." }));
-    box.appendChild(O.el("button.wf-fl-assign", {
-      type: "button", text: "⇲  Assign a job to this station",
-      onClick: function () { setView(st, "assign"); }
-    }));
+    var go = O.el("button.wf-fl-assign", {
+      type: "button", onClick: function () { setView(st, "assign"); }
+    });
+    go.appendChild(icon("person-plus"));
+    go.appendChild(O.el("span", { text: "Assign a job to this station" }));
+    box.appendChild(go);
     return box;
   }
 
@@ -1045,8 +1186,7 @@
         primary: true, busyText: "Passing it on…",
         onClick: function () {
           return doWrite(st, function () {
-            return WFPhase.approveAndAdvance(state.ctx.t, st.job,
-              (rec && rec.signedBy) || state.ctx.member);
+            return WFQC.passSigned(state.ctx.t, st.job, st.job);
           }).then(function () { delete qcState[st.station.id]; });
         }
       }]
@@ -1080,13 +1220,13 @@
 
     if (!q || !q.items) {
       box.appendChild(O.el("div.loading", { text: "Reading the checklist…" }));
-      WFQC.getStationChecklist(state.ctx.t, id, st.phase).then(function (items) {
+      WFQC.checklistFor(state.ctx.t, st.station).then(function (r) {
         qcState[id] = Object.assign({ checked: {}, signature: "", signedBy: "" },
-          qcState[id] || {}, { items: items });
+          qcState[id] || {}, { items: r.items, listName: r.name, source: r.source });
         repaintColumn(st);
       }).catch(function () {
         qcState[id] = Object.assign({ checked: {}, signature: "", signedBy: "" },
-          qcState[id] || {}, { items: [] });
+          qcState[id] || {}, { items: [], listName: null, source: "draft" });
         repaintColumn(st);
       });
       return box;
@@ -1101,6 +1241,15 @@
     box.appendChild(O.el("div.wf-fl-k", { text: "Inspecting" }));
     box.appendChild(O.el("div.wf-fl-num", { style: "font-size:24px", text: jobTitle(st.job) }));
 
+    // Which list this is. Worth naming: a station picking up the wrong list by
+    // name-match is the one failure of the library that a person can spot
+    // instantly and the code never can.
+    box.appendChild(O.el("div.wf-fl-more", {
+      text: q.listName
+        ? "Working the “" + q.listName + "” checklist"
+        : "No saved checklist — working the shipped draft"
+    }));
+
     var total = q.items.length;
     var checked = q.items.filter(function (_, i) { return q.checked[i]; }).length;
     var head = O.el("div.wf-fl-pct", null,
@@ -1112,10 +1261,13 @@
 
     if (!total) {
       box.appendChild(O.el("div.wf-fl-more", {
-        text: "No checklist set up for this station yet. A manager adds one in the gear."
+        text: "No checklist set up for this station yet. A manager makes one in " +
+              "the Roster and points this station at it in the gear."
       }));
       return box;
     }
+
+    box.appendChild(checkAllRow(st, q, checked, total));
 
     q.items.forEach(function (item, i) {
       var on = !!q.checked[i];
@@ -1136,6 +1288,155 @@
 
     box.appendChild(signBlock(st, q));
     return box;
+  }
+
+  /**
+   * Check all, and clear all.
+   *
+   * SAY THE QUIET PART. A one-tap "I did all of these" is genuinely what
+   * somebody who has built the same gate four hundred times needs -- making
+   * them tap ten boxes they already know the answer to is theatre, and theatre
+   * is what teaches people to stop reading. But it is also, obviously, the
+   * fastest way to sign for work nobody looked at.
+   *
+   * So the button exists and the record tells the truth about it: ticking the
+   * list one line at a time and ticking it in one go are stored differently,
+   * and `checkedAll` rides on the signed record. Nobody is stopped; if a job
+   * comes back, the record can answer honestly how carefully it was checked.
+   * Clear all is there so an accidental tap isn't ten taps to undo.
+   */
+  function checkAllRow(st, q, checked, total) {
+    var all = checked === total;
+    var row = O.el("div.wf-fl-allrow");
+
+    row.appendChild(O.el("button.wf-fl-link", {
+      type: "button",
+      text: all ? "Clear all" : "Check all " + total,
+      onClick: function () {
+        if (all) {
+          q.checked = {};
+          q.checkedAll = false;
+        } else {
+          q.items.forEach(function (_, i) { q.checked[i] = true; });
+          // Only counts as a bulk tick if it wasn't nearly done by hand already.
+          q.checkedAll = checked === 0;
+        }
+        repaintColumn(st);
+      }
+    }));
+
+    if (state.ctx.isManager) {
+      row.appendChild(O.el("button.wf-fl-link", {
+        type: "button", text: "Edit this list",
+        onClick: function () { editChecklist(st, q); }
+      }));
+    }
+    return row;
+  }
+
+  /**
+   * Add and remove items without leaving the station.
+   *
+   * Edits go to the named library entry, which is the same thing the Roster
+   * edits -- so a manager fixing a badly worded line at the bench fixes it
+   * everywhere, rather than creating a second version of the list that only
+   * this station sees. If the station is working a shipped draft, saving here
+   * promotes it into a real named list for the first time.
+   */
+  function editChecklist(st, q) {
+    var items = q.items.map(function (i) { return { text: i.text, spec: i.spec || "" }; });
+    var name = q.listName || st.station.phase || st.station.table || st.station.id;
+
+    var nameField = O.el("input", {
+      type: "text", value: name,
+      style: "font:inherit;font-size:14px;padding:8px 10px;border-radius:10px;" +
+             "border:1px solid var(--wf-line);width:100%;box-sizing:border-box"
+    });
+
+    var listWrap = O.el("div", { style: "display:flex;flex-direction:column;gap:6px" });
+    function paintItems() {
+      listWrap.innerHTML = "";
+      if (!items.length) {
+        listWrap.appendChild(O.el("div.muted", { style: "font-size:13px", text: "No items yet." }));
+      }
+      items.forEach(function (it, i) {
+        var text = O.el("input", {
+          type: "text", value: it.text, placeholder: "What to check",
+          style: "flex:2 1 160px;font:inherit;font-size:13.5px;padding:6px 9px;" +
+                 "border-radius:9px;border:1px solid var(--wf-line)"
+        });
+        text.addEventListener("input", function () { it.text = text.value; });
+        var spec = O.el("input", {
+          type: "text", value: it.spec, placeholder: "Tolerance (optional)",
+          style: "flex:1 1 120px;font:inherit;font-size:12.5px;padding:6px 9px;" +
+                 "border-radius:9px;border:1px solid var(--wf-line)"
+        });
+        spec.addEventListener("input", function () { it.spec = spec.value; });
+
+        listWrap.appendChild(O.el("div", {
+          style: "display:flex;gap:6px;align-items:center;flex-wrap:wrap"
+        }, text, spec,
+          O.btn("↑", { small: true, quiet: true, onClick: function () {
+            if (!i) return;
+            var t2 = items[i - 1]; items[i - 1] = items[i]; items[i] = t2; paintItems();
+          } }),
+          O.btn("↓", { small: true, quiet: true, onClick: function () {
+            if (i === items.length - 1) return;
+            var t2 = items[i + 1]; items[i + 1] = items[i]; items[i] = t2; paintItems();
+          } }),
+          O.btn("Remove", { small: true, quiet: true, onClick: function () {
+            items.splice(i, 1); paintItems();
+          } })));
+      });
+    }
+    paintItems();
+
+    var adder = O.el("input", {
+      type: "text", placeholder: "Add an item and press Enter",
+      style: "font:inherit;font-size:13.5px;padding:8px 10px;border-radius:10px;" +
+             "border:1px solid var(--wf-line);width:100%;box-sizing:border-box;margin-top:8px"
+    });
+    adder.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      var v = adder.value.trim();
+      if (!v) return;
+      items.push({ text: v, spec: "" });
+      adder.value = "";
+      paintItems();
+    });
+
+    O.dialog({
+      title: "Checklist for " + (st.station.table || "this station"),
+      note: "This is the shared list, not a copy — changes show up anywhere else " +
+            "using it. Editing a list never changes a check somebody already signed.",
+      content: O.el("div", null,
+        O.el("div.wf-cp-k", { text: "List name" }), nameField,
+        O.el("div", { style: "height:10px" }),
+        listWrap, adder),
+      buttons: [{
+        label: "Save the list", primary: true, busyText: "Saving…",
+        onClick: function () {
+          var newName = nameField.value.trim();
+          if (!newName) return;
+          var clean = items.filter(function (i) { return String(i.text || "").trim(); });
+          return WFQC.saveLibraryEntry(state.ctx.t, newName, clean)
+            .then(function () {
+              // Point the station at it explicitly, so a rename can't orphan it.
+              var s = state.cfg.stations.filter(function (x) {
+                return x.id === st.station.id;
+              })[0];
+              if (s) s.checklist = newName;
+              return WFTables.save(state.ctx.t, state.cfg);
+            })
+            .then(function () {
+              delete qcState[st.station.id];
+              return refreshData();
+            })
+            .then(paint);
+        }
+      }]
+    });
   }
 
   /**
@@ -1198,17 +1499,30 @@
     return box;
   }
 
+  /**
+   * Sign the checklist -- and stop there.
+   *
+   * Signing used to pass the job on in the same action, which meant the mock's
+   * "are you sure you're sending this to Sandblast?" question never appeared
+   * and there was no moment between attesting to the work and letting go of it.
+   * Signing now returns to the station with Complete gone green; Complete is
+   * what ships it, and it asks first.
+   */
   function signOff(st, q) {
     var signer = ((state.ctx.board && state.ctx.board.members) || [])
       .filter(function (m) { return m.username === q.signedBy; })[0];
     if (!signer) return;
 
     write(st, function () {
-      return WFQC.signOffAndPass(state.ctx.t, st.job, {
+      return WFQC.signOff(state.ctx.t, st.job, {
         stationId: st.station.id,
         phase: st.phase,
+        listName: q.listName,
         items: q.items,
         checked: q.checked,
+        // Ticked in one go rather than line by line. Recorded, not prevented --
+        // if a job comes back, the record answers honestly how it was checked.
+        checkedAll: !!q.checkedAll,
         signature: q.signature,
         signedBy: signer,
         worker: state.ctx.member
@@ -1333,12 +1647,20 @@
   /* --------------------------------------------------------------- stations */
 
   /**
-   * Station setup. This is the one thing a manager can write from this screen
-   * in the read-only pass, and it has to be: nothing renders until somebody
-   * says which phase a booth pulls from and who is standing at it. It writes
-   * configuration, never a job.
+   * Station setup: what exists, what kind it is, who's on it and which
+   * checklist it works. Configuration only -- this never touches a job.
+   *
+   * The checklist names have to be in hand before the dialog paints, because a
+   * dropdown that fills in half a second after you open it is a dropdown people
+   * close before it finishes.
    */
   function openStations() {
+    WFQC.libraryNames(state.ctx.t)
+      .catch(function () { return []; })
+      .then(paintStations);
+  }
+
+  function paintStations(libNames) {
     var cfg = JSON.parse(JSON.stringify(state.cfg));
     var phases = WFTables.phaseOptions(state.ctx.boardCfg);
     var people = ((state.ctx.board && state.ctx.board.members) || []).slice()
@@ -1347,23 +1669,49 @@
       });
 
     var body = O.el("div");
+    var list = O.el("div");
     var rows = [];
 
-    cfg.stations.forEach(function (s) {
+    /**
+     * One station's card in the editor.
+     *
+     * The type dropdown is the important control: picking "Welding" points the
+     * station at Assemble Legacy without anybody choosing a list, which is what
+     * makes a fifth welding bench a ten-second job. The phase dropdown stays
+     * underneath as an override, because the board can grow a list this code
+     * has never heard of and guessing silently would be worse than asking.
+     */
+    function addRow(s) {
       var shown = (cfg.visible || []).indexOf(s.id) !== -1;
 
       var on = O.el("input", { type: "checkbox" });
       on.checked = shown;
 
       var table = O.el("input", { type: "text", value: s.table || "" });
-      var type = O.el("input", { type: "text", value: s.station || "" });
+
+      var kind = O.el("select");
+      WFTables.types().forEach(function (tp) {
+        var o = O.el("option", { value: tp.id, text: tp.label });
+        if (tp.id === s.type) o.selected = true;
+        kind.appendChild(o);
+      });
 
       var phase = O.el("select");
-      phase.appendChild(O.el("option", { value: "", text: "No phase yet" }));
-      phases.forEach(function (p) {
-        var o = O.el("option", { value: p, text: p });
-        if (p === s.phase) o.selected = true;
-        phase.appendChild(o);
+      var fillPhases = function (selected) {
+        phase.innerHTML = "";
+        phase.appendChild(O.el("option", { value: "", text: "No phase yet" }));
+        phases.forEach(function (p) {
+          var o = O.el("option", { value: p, text: p });
+          if (p === selected) o.selected = true;
+          phase.appendChild(o);
+        });
+      };
+      fillPhases(s.phase);
+
+      // Changing the type re-points the queue. Silently leaving the old phase
+      // behind is how a bench ends up labelled Welding and pulling powder work.
+      kind.addEventListener("change", function () {
+        fillPhases(WFTables.phaseForType(kind.value));
       });
 
       var who = O.el("select");
@@ -1374,44 +1722,96 @@
         who.appendChild(o);
       });
 
+      var area = O.el("select");
+      WFTables.areas().forEach(function (a) {
+        var o = O.el("option", { value: a.id, text: a.label });
+        if (a.id === s.area) o.selected = true;
+        area.appendChild(o);
+      });
+
       var card = O.el("div", {
         style: "border:1px solid var(--wf-line);border-radius:14px;padding:12px 14px;" +
                "margin-bottom:10px;display:flex;flex-direction:column;gap:8px"
-      },
-        O.el("label", { style: "display:flex;align-items:center;gap:8px;font-weight:600" },
-          on, O.el("span", { text: WFTables.areaLabel(s.area) + " · " + (s.table || s.id) })),
-        field("Station name", table),
-        field("What it does", type),
-        field("Phase it pulls from", phase),
-        field("Who's on it", who));
-
-      // The checklist lives per station, not per phase, because the blast
-      // booth, the powder booth and the cure oven share one phase and check
-      // completely different things. One line per item; "text | tolerance"
-      // splits into the line and the small print under it.
-      var checks = O.el("textarea", { rows: "5", placeholder: "Loading…" });
-      checks.disabled = true;
-      WFQC.getStationChecklist(state.ctx.t, s.id, s.phase).then(function (items) {
-        checks.value = items.map(function (i) {
-          return i.spec ? i.text + " | " + i.spec : i.text;
-        }).join("\n");
-        checks.placeholder = "Dimensions match shop drawing | Within ±1/8″";
-        checks.disabled = false;
-      }).catch(function () {
-        checks.placeholder = "Couldn't read this station's checklist.";
-        checks.disabled = false;
       });
-      card.appendChild(field("QC checklist — one per line, \"item | tolerance\"", checks));
 
-      body.appendChild(card);
-      rows.push({ s: s, on: on, table: table, type: type, phase: phase, who: who, checks: checks });
+      var head = O.el("div", {
+        style: "display:flex;align-items:center;gap:8px;font-weight:600"
+      },
+        on, O.el("span", { text: s.table || s.id }));
+      head.appendChild(O.btn("Remove", {
+        small: true, danger: true,
+        onClick: function () {
+          // Recorded by id so the station stays gone. A plain filter would let
+          // the shipped default walk back in on the next load.
+          cfg.removed = (cfg.removed || []).concat([s.id]);
+          cfg.stations = cfg.stations.filter(function (x) { return x.id !== s.id; });
+          rows = rows.filter(function (r) { return r.s.id !== s.id; });
+          card.parentNode.removeChild(card);
+        }
+      }));
+      head.lastChild.style.marginLeft = "auto";
+      card.appendChild(head);
+
+      card.appendChild(field("Station name", table));
+      card.appendChild(field("What kind of station", kind));
+      card.appendChild(field("Queue pulls from", phase));
+      card.appendChild(field("Who's on it", who));
+      card.appendChild(field("Which screen", area));
+
+      // A station POINTS AT a checklist; it doesn't own one. The lists live in
+      // one library that the Roster edits, so the same list can serve four
+      // welding benches and a manager fixes a badly worded line once.
+      var check = O.el("select");
+      check.appendChild(O.el("option", { value: "", text: "Match by name automatically" }));
+      (libNames || []).forEach(function (n) {
+        var o = O.el("option", { value: n, text: n });
+        if (n === s.checklist) o.selected = true;
+        check.appendChild(o);
+      });
+      card.appendChild(field("QC checklist", check));
+
+      var whichNote = O.el("div.muted", { style: "font-size:11.5px;margin-top:-4px" });
+      card.appendChild(whichNote);
+      WFQC.checklistFor(state.ctx.t, s).then(function (r) {
+        whichNote.textContent = r.name
+          ? "Currently working “" + r.name + "” · " + r.items.length + " items"
+          : "No saved list matches — working the shipped draft of " +
+            r.items.length + " items. Make one in the Roster.";
+      }).catch(function () { whichNote.textContent = ""; });
+
+      list.appendChild(card);
+      rows.push({ s: s, on: on, table: table, kind: kind, phase: phase,
+                  who: who, area: area, check: check });
+    }
+
+    cfg.stations.forEach(addRow);
+    body.appendChild(list);
+
+    var adder = O.el("div", { style: "display:flex;gap:8px;align-items:center;margin-top:4px" });
+    var newKind = O.el("select", { style: "width:auto;padding:6px 10px;border-radius:9px" });
+    WFTables.types().forEach(function (tp) {
+      newKind.appendChild(O.el("option", { value: tp.id, text: tp.label }));
     });
+    adder.appendChild(newKind);
+    adder.appendChild(O.btn("Add a station", {
+      onClick: function () {
+        var s = WFTables.newStation(cfg, state.area, newKind.value);
+        s.table = WFTables.typeLabel(newKind.value) + " station";
+        cfg.stations.push(s);
+        cfg.visible = (cfg.visible || []).concat([s.id]);
+        // Un-remove it, in case this id was deleted earlier in the same sitting.
+        cfg.removed = (cfg.removed || []).filter(function (id) { return id !== s.id; });
+        addRow(s);
+      }
+    }));
+    body.appendChild(adder);
 
     O.dialog({
       title: "Stations",
-      note: "A station shows nothing until it has a phase. Untick a station to " +
-            "take it off the screen without losing its setup. The checklist is " +
-            "what Complete makes somebody work through before a job can pass.",
+      note: "Stations describe the shop, not the board — four welding benches " +
+            "all pull the same list. The kind of station sets where its queue " +
+            "comes from. Untick one to take it off the screen without losing " +
+            "its setup; Remove deletes it for good.",
       content: body,
       buttons: [{
         label: "Save", primary: true, busyText: "Saving…",
@@ -1419,38 +1819,25 @@
           var visible = [];
           rows.forEach(function (r) {
             r.s.table = r.table.value.trim();
-            r.s.station = r.type.value.trim();
+            r.s.type = r.kind.value;
+            r.s.station = WFTables.typeLabel(r.kind.value);
             r.s.phase = r.phase.value;
             r.s.welder = r.who.value;
+            r.s.area = r.area.value;
+            r.s.checklist = r.check.value || "";
             if (r.on.checked) visible.push(r.s.id);
           });
           cfg.visible = visible;
           return WFTables.save(state.ctx.t, cfg)
-            .then(function () { return saveChecklists(rows); })
             .then(function () {
               state.cfg = cfg;
               qcState = {};   // stale lists must not survive an edit
+              views = {};     // a removed station must not keep a view open
               paint();
             });
         }
       }]
     });
-  }
-
-  /** Parse the textareas back into {text, spec} items and save each station's. */
-  function saveChecklists(rows) {
-    return rows.reduce(function (chain, r) {
-      return chain.then(function () {
-        if (r.checks.disabled) return null;   // never loaded; don't overwrite
-        var items = r.checks.value.split("\n")
-          .map(function (line) {
-            var parts = String(line).split("|");
-            return { text: (parts[0] || "").trim(), spec: (parts[1] || "").trim() };
-          })
-          .filter(function (i) { return i.text; });
-        return WFQC.saveStationChecklist(state.ctx.t, r.s.id, items);
-      });
-    }, Promise.resolve());
   }
 
   function field(label, control) {

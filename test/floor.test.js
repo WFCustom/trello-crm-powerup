@@ -159,39 +159,88 @@ const ONE_STATION = {
 
 /* ============================================================== the layer */
 
-test("the defaults name the stations the mock named, and invent no phase", () => {
+test("the defaults describe the shop, not the board", () => {
   const { T } = boot();
-  const d = T.defaults();
-  const names = d.map((s) => s.table);
-  assert.deepEqual(names, [
-    "Station #1", "Station #2", "Station #3", "Station #4",
+  const d = T.defaults().map(T.hydrate);
+  assert.deepEqual(d.map((s) => s.table), [
+    "Station #1", "Station #2", "Station #3", "Station #4", "CAP rail bench",
     "Blast booth", "Powder booth", "Cure oven", "Wet paint"
   ]);
-  // The laser bay and wet paint have no matching list on this board, so they
-  // are left unset rather than pointed somewhere plausible.
-  assert.equal(d.find((s) => s.table === "Station #4").phase, "");
-  assert.equal(d.find((s) => s.table === "Wet paint").phase, "");
+
+  // THE BUG THIS TEST EXISTS FOR. The first cut gave each welding bench a
+  // different phase, so only Station #1 ever had a queue. Four welding benches
+  // do the same work and therefore pull the same list.
+  const welding = d.filter((s) => s.type === "weld");
+  assert.equal(welding.length, 4);
+  assert.ok(welding.every((s) => s.phase === "Assemble Legacy"),
+    "every welding bench pulls the same list");
+
+  assert.equal(d.find((s) => s.table === "CAP rail bench").phase, "Assemble CAP");
   assert.equal(d.find((s) => s.table === "Blast booth").phase, "Sandblast / Powder Coat");
+  // Wet paint has no matching list, so it is left unset rather than pointed
+  // somewhere plausible -- a guess dressed as a fact.
+  assert.equal(d.find((s) => s.table === "Wet paint").phase, "");
   // Nobody is rostered by default.
   assert.ok(d.every((s) => s.welder === ""));
 });
 
-test("a saved config is merged over the defaults, so a new station can't vanish", () => {
+test("a station's kind decides where its queue comes from", () => {
   const { T } = boot();
+  assert.equal(T.phaseForType("weld"), "Assemble Legacy");
+  assert.equal(T.phaseForType("cnc"), "Assemble CNC");
+  assert.equal(T.phaseForType("cap"), "Assemble CAP");
+  assert.equal(T.phaseForType("laser"), "", "no list corresponds to it");
+  assert.equal(T.phaseForType("nonsense"), "");
+});
+
+test("a saved config from before station kinds existed still works", () => {
+  const { T } = boot();
+  // Old configs carry `station` and `phase` but no `type`. A board that saved
+  // one last month must not come back with every bench set to "Something else".
   const merged = T.merge({
-    stations: [{ id: "s1", table: "Big table", welder: "kevinmoss", phase: "Assemble CNC" }],
+    stations: [{ id: "s1", table: "Big table", station: "Welding",
+                 welder: "kevinmoss", phase: "Assemble CNC" }],
     visible: ["s1"]
   });
-  assert.equal(merged.stations.length, 8, "the other seven survive");
   const s1 = merged.stations.find((s) => s.id === "s1");
+  assert.equal(s1.type, "weld", "inferred back out of what it did say");
   assert.equal(s1.table, "Big table");
-  assert.equal(s1.phase, "Assemble CNC");
-  assert.equal(s1.station, "Welding", "fields the save didn't mention keep their default");
-  assert.deepEqual(merged.visible, ["s1"]);
+  assert.equal(s1.phase, "Assemble CNC", "an explicit override still wins");
+});
 
-  // A station id nobody knows about is dropped from visible rather than
-  // rendering as a blank column.
-  assert.deepEqual(T.merge({ visible: ["ghost"] }).visible.length, 8);
+test("a new shipped station appears, and a deleted one stays deleted", () => {
+  const { T } = boot();
+  // These two rules pull in opposite directions and both matter.
+  const grown = T.merge({ stations: [{ id: "s1", table: "Big table" }], visible: ["s1"] });
+  assert.equal(grown.stations.length, 9, "the others survive");
+
+  const pruned = T.merge({ stations: [], visible: [], removed: ["s4"] });
+  assert.equal(pruned.stations.length, 8);
+  assert.ok(!pruned.stations.some((s) => s.id === "s4"),
+    "a station somebody deleted does not walk back in on the next load");
+  assert.deepEqual(pruned.removed, ["s4"]);
+});
+
+test("a station this shop added itself survives a merge", () => {
+  const { T } = boot();
+  const merged = T.merge({
+    stations: [{ id: "x1", area: "shop", table: "Fifth bench", type: "weld", welder: "" }],
+    visible: ["x1"]
+  });
+  const mine = merged.stations.find((s) => s.id === "x1");
+  assert.ok(mine, "kept");
+  assert.equal(mine.phase, "Assemble Legacy", "and hydrated from its kind");
+});
+
+test("adding a station never collides with an id already in use", () => {
+  const { T } = boot();
+  const cfg = T.merge(null);
+  const a = T.newStation(cfg, "shop", "weld");
+  cfg.stations.push(a);
+  const b = T.newStation(cfg, "shop", "cnc");
+  assert.notEqual(a.id, b.id);
+  assert.equal(a.phase, "Assemble Legacy");
+  assert.equal(b.phase, "Assemble CNC");
 });
 
 test("phase options come from the board's work phases, de-duplicated", () => {
@@ -451,10 +500,13 @@ test("saving stations writes config and nothing else", async () => {
   const node = await render(env, 1280);
   $(node, ".wf-fl-gear")[0]
     .dispatchEvent(new env.win.Event("click"));
+  // The dialog waits for the checklist library before it paints, so that a
+  // dropdown doesn't fill in after somebody has already looked at it.
+  await new Promise((r) => setTimeout(r, 0));
 
   const doc = env.win.document;
   const selects = $(doc, "select");
-  assert.ok(selects.length >= 2, "a phase picker and a person picker");
+  assert.ok(selects.length >= 4, "kind, phase, person, screen");
 
   $(doc, "button").find((b) => textOf(b) === "Save")
     .dispatchEvent(new env.win.Event("click"));
@@ -737,6 +789,64 @@ test("the checklist carries its tolerances and starts unticked", async () => {
   assert.match(textOf(col), /items remaining/);
 });
 
+test("check all ticks the lot, and clear all puts it back", async () => {
+  const env = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  const node = await render(env, 1280);
+  $(node, ".wf-fl-ic")[1].dispatchEvent(new env.win.Event("click"));
+  await new Promise((r) => setTimeout(r, 0));
+
+  let col = $(node, '[data-station="s1"]')[0];
+  const total = $(col, ".wf-fl-ck").length;
+  assert.ok(total >= 5);
+
+  // Somebody who has built the same gate four hundred times shouldn't have to
+  // tap ten boxes they already know the answer to.
+  $(col, ".wf-fl-allrow button")[0].dispatchEvent(new env.win.Event("click"));
+  col = $(node, '[data-station="s1"]')[0];
+  assert.equal($(col, ".wf-fl-ck.is-on").length, total, "all ticked");
+  assert.match(textOf(col), new RegExp(total + " of " + total + " checked"));
+
+  // And an accidental tap isn't ten taps to undo.
+  const clear = $(col, ".wf-fl-allrow button")[0];
+  assert.match(textOf(clear), /Clear all/);
+  clear.dispatchEvent(new env.win.Event("click"));
+  col = $(node, '[data-station="s1"]')[0];
+  assert.equal($(col, ".wf-fl-ck.is-on").length, 0);
+});
+
+test("only a manager gets the edit-this-list control", async () => {
+  const mk = (role) => boot({
+    role, saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+
+  for (const [role, expected] of [["worker", 1], ["manager", 2]]) {
+    const env = mk(role);
+    const node = await render(env, 1280);
+    $(node, ".wf-fl-ic")[1].dispatchEvent(new env.win.Event("click"));
+    await new Promise((r) => setTimeout(r, 0));
+    const col = $(node, '[data-station="s1"]')[0];
+    assert.equal($(col, ".wf-fl-allrow button").length, expected,
+      role + " sees the right controls");
+  }
+});
+
+test("the view names which checklist it is working", async () => {
+  // A station picking up the wrong list by name-match is the one failure of the
+  // library a person spots instantly and the code never can.
+  const env = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  const node = await render(env, 1280);
+  $(node, ".wf-fl-ic")[1].dispatchEvent(new env.win.Event("click"));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.match(textOf($(node, '[data-station="s1"]')[0]), /checklist|shipped draft/i);
+});
+
 test("a job already signed shows the stamp instead of the checklist", async () => {
   const card = job("B", "LA", { claimed: KEV, running: true });
   card.qcRecord = {
@@ -751,6 +861,78 @@ test("a job already signed shows the stamp instead of the checklist", async () =
   const col = $(node, '[data-station="s1"]')[0];
   assert.match(textOf(col), /QC passed/);
   assert.match(textOf(col), /Scott VanWorkom/, "who actually looked at it");
+});
+
+/* ================================================================== assign */
+
+test("Complete on a signed job asks before it ships, naming where it goes", async () => {
+  const card = job("B", "LA", { claimed: KEV, running: true });
+  card.qcRecord = {
+    listId: "LA", status: "passed", signedAt: new Date().toISOString(),
+    signature: "Kevin Moss", signedBy: SCOTT
+  };
+  const env = boot({ role: "worker", saved: ONE_STATION, cards: [card] });
+  const node = await render(env, 1280);
+
+  $(node, ".wf-fl-done")[0].dispatchEvent(new env.win.Event("click"));
+
+  const body = textOf(env.win.document.body);
+  assert.match(body, /Mark .* complete\?/);
+  assert.match(body, /Scott VanWorkom/, "who signed it");
+  assert.equal(env.written.length, 0, "and nothing moves until they answer");
+});
+
+test("the icons are drawn, not typed", async () => {
+  // A glyph is at the mercy of whichever font the TV falls back to -- "⇲" read
+  // as an arrow into a corner, not as a person.
+  const env = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  const node = await render(env, 1280);
+  const icons = $(node, ".wf-fl-ic");
+  assert.equal(icons.length, 3);
+  icons.forEach((b) => assert.equal(b.querySelectorAll("svg").length, 1, "an svg, not a character"));
+  // The assign icon is a head and shoulders.
+  assert.ok($(icons[0], "path").length >= 3, "person plus a plus");
+});
+
+/* ============================================================== the due date */
+
+test("whoever schedules can move a due date from the station; a welder cannot", async () => {
+  const late = job("B", "LA", { claimed: KEV, running: true, due: iso(-3) });
+
+  const boss = boot({ role: "manager", saved: ONE_STATION, cards: [late] });
+  let node = await render(boss, 1280);
+  const btn = $(node, ".wf-fl-due")[0];
+  assert.ok(btn, "a late job can be rescheduled from the floor");
+  assert.ok(btn.classList.contains("is-late"));
+
+  // A due date is a promise somebody else is planning around. A welder can see
+  // it has gone red and say so; they can't quietly buy themselves a week.
+  const hand = boot({ role: "worker", saved: ONE_STATION, cards: [late] });
+  node = await render(hand, 1280);
+  assert.equal($(node, ".wf-fl-due").length, 0);
+  assert.match(textOf(node), /was due/);
+});
+
+test("the reschedule dialog pushes from today, not from the date it missed", async () => {
+  const env = boot({
+    role: "manager", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true, due: iso(-30) })]
+  });
+  const node = await render(env, 1280);
+  $(node, ".wf-fl-due")[0].dispatchEvent(new env.win.Event("click"));
+
+  const doc = env.win.document;
+  assert.match(textOf(doc.body), /Past due/);
+  const quick = $(doc, "button").find((b) => textOf(b) === "+1 week");
+  assert.ok(quick, "the realistic answer is usually a few days");
+  quick.dispatchEvent(new env.win.Event("click"));
+
+  const picker = $(doc, 'input[type="datetime-local"]')[0];
+  // A month past due, +1 week must land next week -- not three weeks ago.
+  assert.ok(new Date(picker.value).getTime() > Date.now(), "in the future");
 });
 
 /* ================================================================== assign */

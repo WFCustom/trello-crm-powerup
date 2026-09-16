@@ -119,12 +119,44 @@
    * checks only, because a check snapshots the list when it opens -- adding an
    * item later must not make an already-signed check look incomplete.
    */
+  /** Make a new list from nothing. This is the thing that stops needing code. */
+  function newChecklistRow(ctx, templates) {
+    var name = O.el("input", {
+      type: "text", placeholder: "Name a new checklist, e.g. Powder booth",
+      style: "flex:1 1 240px"
+    });
+    var note = O.el("span.hint");
+
+    function create() {
+      var v = name.value.trim();
+      if (!v) return;
+      if (templates[v]) { note.textContent = "There's already a list called that."; return; }
+      note.textContent = "";
+      // Created empty on purpose: a list seeded with somebody else's items is a
+      // list people delete line by line before they can use it.
+      return WFQC.saveLibraryEntry(ctx.t, v, []).then(ctx.reload);
+    }
+    name.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); create(); }
+    });
+
+    return O.el("div.add-row", { style: "margin-bottom:16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap" },
+      name,
+      O.btn("Create checklist", { primary: true, busyText: "Creating…", onClick: create }),
+      note);
+  }
+
   function qcTemplateBlock(ctx, phase, templates) {
     // An unsaved phase shows the shipped draft so the list isn't blank; a phase
     // saved as empty stays empty, because [] is truthy and wins here.
-    var items = (templates[phase.name] || WFQC.defaultTemplate(phase.name)).slice();
+    var raw = Array.isArray(templates[phase.name])
+      ? templates[phase.name]
+      : (WFQC.defaultStationItems(phase.name) || WFQC.defaultTemplate(phase.name));
+    // Items carry a tolerance now. Old lists are plain strings; normalise so
+    // one editor handles both and nobody has to migrate anything.
+    var items = (raw || []).map(WFQC.normItem);
     var unsaved = !Array.isArray(templates[phase.name]);
-    var selfCheck = WFQC.requiresSelfCheck(phase.name);
+    var selfCheck = !phase.custom && WFQC.requiresSelfCheck(phase.name);
     var listWrap = O.el("div");
 
     /* Items are editable in place -- reword one without deleting and retyping.
@@ -134,12 +166,20 @@
       if (!items.length) {
         listWrap.appendChild(O.el("div.hint", { text: "No checklist yet — the checker just confirms the work is right." }));
       }
-      items.forEach(function (text, i) {
-        var field = O.el("input", { type: "text", value: text, style: "flex:1" });
-        field.addEventListener("input", function () { items[i] = field.value; });
-        listWrap.appendChild(O.el("div", { style: "display:flex;align-items:center;gap:6px;padding:4px 0" },
+      items.forEach(function (item, i) {
+        var field = O.el("input", { type: "text", value: item.text, style: "flex:2 1 150px" });
+        field.addEventListener("input", function () { items[i].text = field.value; });
+        // The tolerance is what turns a line anybody can tick in good conscience
+        // into one they can actually fail.
+        var spec = O.el("input", {
+          type: "text", value: item.spec || "",
+          placeholder: "Tolerance (optional)",
+          style: "flex:1 1 120px;font-size:12.5px"
+        });
+        spec.addEventListener("input", function () { items[i].spec = spec.value; });
+        listWrap.appendChild(O.el("div", { style: "display:flex;align-items:center;gap:6px;padding:4px 0;flex-wrap:wrap" },
           O.el("span.wf-card-s", { style: "width:18px;text-align:right", text: (i + 1) + "." }),
-          field,
+          field, spec,
           O.btn("↑", {
             small: true, quiet: true,
             onClick: function () {
@@ -169,28 +209,47 @@
     function addItem() {
       var v = input.value.trim();
       if (!v) return;
-      items.push(v); input.value = ""; paint();
+      items.push({ text: v, spec: "" }); input.value = ""; paint();
+    }
+
+    var actions = O.el("div", { style: "margin-top:12px;display:flex;gap:8px;flex-wrap:wrap" },
+      O.btn("Save checklist", {
+        primary: true, busyText: "Saving…",
+        onClick: function () {
+          return WFQC.saveLibraryEntry(ctx.t, phase.name, items).then(ctx.reload);
+        }
+      }));
+
+    // Only lists somebody made here can be deleted. A phase's list can be
+    // emptied but not removed, because the phase still exists and a station
+    // pointed at it would silently fall back to a draft.
+    if (phase.custom) {
+      actions.appendChild(O.btn("Delete this list", {
+        danger: true, busyText: "Deleting…",
+        onClick: function () {
+          return WFQC.deleteLibraryEntry(ctx.t, phase.name).then(ctx.reload);
+        }
+      }));
     }
 
     return O.el("div.phase-block", null,
       O.el("div", { style: "display:flex;align-items:center;gap:10px;flex-wrap:wrap" },
-        O.el("h3", { style: "margin:0", text: phase.name + " — QC checklist" }),
-        selfCheck ? O.tag("self-checked", "warn") : O.tag("peer-checked", "go"),
+        O.el("h3", { style: "margin:0", text: phase.name }),
+        phase.custom
+          ? O.tag("custom list", "quiet")
+          : (selfCheck ? O.tag("self-checked", "warn") : O.tag("peer-checked", "go")),
         unsaved ? O.tag("draft — not saved yet", "quiet") : null),
-      O.el("div.hint", { style: "margin-top:6px", text: selfCheck
-        ? "The person who does " + phase.name + " ticks this themselves before the job moves on. "
-          + "No second signature, and an unticked line just means it isn't finished."
-        : "What a peer checks before this phase moves on. Changes affect future checks only." }),
+      O.el("div.hint", { style: "margin-top:6px", text: phase.custom
+        ? "Point a station at this by name in the Floor gear, or name it after a "
+          + "phase or a kind of station and it gets picked up automatically."
+        : selfCheck
+          ? "The person who does " + phase.name + " ticks this themselves before the job moves on. "
+            + "No second signature, and an unticked line just means it isn't finished."
+          : "What a peer checks before this phase moves on. Changes affect future checks only." }),
       listWrap,
       O.el("div.add-row", { style: "margin-top:10px" }, input,
         O.btn("Add", { onClick: addItem })),
-      O.el("div", { style: "margin-top:12px" },
-        O.btn("Save checklist", {
-          primary: true, busyText: "Saving…",
-          onClick: function () {
-            return WFQC.saveTemplate(ctx.t, phase.name, items).then(ctx.reload);
-          }
-        })));
+      actions);
   }
 
   function phaseBlock(ctx, phase, members) {
@@ -298,22 +357,36 @@
           out.appendChild(O.empty("No work phases configured for this board yet."));
         }
 
-        /* Every phase that carries a checklist, peer-checked or self-checked.
-           Both need editing here; only the peer ones stop for someone else. */
+        /* THE CHECKLIST LIBRARY.
+           Every list on the board, whatever it is called. Phases that carry a
+           check are shown whether or not anybody has written one yet, so the
+           starting drafts are visible; everything else is a list somebody made
+           here, and making one takes no code. Stations pick a list by name. */
         var qcPhases = phases.filter(function (p) { return WFQC.needsChecklist(p.name); });
-        if (qcPhases.length) {
-          var peerCount = qcPhases.filter(function (p) { return WFQC.requiresQc(p.name); }).length;
-          var selfCount = qcPhases.length - peerCount;
-          var counts = [];
-          if (peerCount) counts.push(peerCount + " peer-checked");
-          if (selfCount) counts.push(selfCount + " self-checked");
-          out.appendChild(O.el("div.wf-group-h", { style: "margin-top:28px" },
-            O.el("div.wf-group-t", { text: "Quality checklists" }),
-            O.el("span.wf-group-n", { text: counts.join(" · ") })));
-          var qcGrid = O.el("div.wf-panels.halves", { style: "margin-bottom:20px" });
-          qcPhases.forEach(function (p) { qcGrid.appendChild(qcTemplateBlock(ctx, p, qcTemplates)); });
-          out.appendChild(qcGrid);
-        }
+        var phaseNames = {};
+        qcPhases.forEach(function (p) { phaseNames[p.name] = true; });
+        var extras = Object.keys(qcTemplates).filter(function (n) { return !phaseNames[n]; }).sort();
+
+        out.appendChild(O.el("div.wf-group-h", { style: "margin-top:28px" },
+          O.el("div.wf-group-t", { text: "Quality checklists" }),
+          O.el("span.wf-group-n", {
+            text: (qcPhases.length + extras.length) + " lists · used by name"
+          })));
+
+        out.appendChild(O.el("p.muted", { style: "margin:0 0 12px", text:
+          "A station works the list whose name matches its checklist setting, its " +
+          "phase, or its kind — so a list called \"Powder booth\" is picked up by " +
+          "the powder booth without touching its setup. Editing a list never " +
+          "changes a check somebody already signed." }));
+
+        out.appendChild(newChecklistRow(ctx, qcTemplates));
+
+        var qcGrid = O.el("div.wf-panels.halves", { style: "margin-bottom:20px" });
+        qcPhases.forEach(function (p) { qcGrid.appendChild(qcTemplateBlock(ctx, p, qcTemplates)); });
+        extras.forEach(function (n) {
+          qcGrid.appendChild(qcTemplateBlock(ctx, { name: n, custom: true }, qcTemplates));
+        });
+        out.appendChild(qcGrid);
 
         out.appendChild(O.el("p.muted", { text:
           "Managers and specialists save to this board, so every board can have its own crew. " +

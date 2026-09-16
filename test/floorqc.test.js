@@ -89,42 +89,99 @@ test("the hint names what is actually in the way, and counts it", () => {
 
 /* ======================================================== station checklists */
 
-test("a station's own list wins over the phase's", async () => {
+test("a station picks its list by name, explicit choice first", async () => {
   const t = fakeT({
-    "board/wfQcChecklists": { f1: [{ text: "Blast to near-white", spec: "SSPC SP10" }] },
-    "board/qcTemplates": { "Sandblast / Powder Coat": ["Something else entirely"] }
-  });
-  const items = await QC.getStationChecklist(t, "f1", "Sandblast / Powder Coat");
-  assert.deepEqual(items.map((i) => i.text), ["Blast to near-white"]);
-  assert.equal(items[0].spec, "SSPC SP10");
-});
-
-test("two stations on one phase get different lists", async () => {
-  // This is the whole reason for keying by station.
-  const t = fakeT({
-    "board/wfQcChecklists": {
-      f1: [{ text: "Blast to near-white" }],
-      f2: [{ text: "Film thickness checked" }]
+    "board/qcTemplates": {
+      "Powder booth": [{ text: "Film thickness checked", spec: "2-4 mil" }],
+      "Sandblast / Powder Coat": [{ text: "Something else entirely" }]
     }
   });
-  const blast = await QC.getStationChecklist(t, "f1", "Sandblast / Powder Coat");
-  const powder = await QC.getStationChecklist(t, "f2", "Sandblast / Powder Coat");
-  assert.notDeepEqual(blast.map((i) => i.text), powder.map((i) => i.text));
+  const r = await QC.checklistFor(t, {
+    id: "f2", table: "Powder booth", station: "Spray · powder coat",
+    phase: "Sandblast / Powder Coat", checklist: "Powder booth"
+  });
+  assert.equal(r.name, "Powder booth");
+  assert.deepEqual(r.items.map((i) => i.text), ["Film thickness checked"]);
+  assert.equal(r.items[0].spec, "2-4 mil");
 });
 
-test("a station nobody has set up falls back to the phase's saved list", async () => {
-  const t = fakeT({ "board/qcTemplates": { "Assemble CNC": ["Check the thing"] } });
-  const items = await QC.getStationChecklist(t, "s3", "Assemble CNC");
-  assert.deepEqual(items.map((i) => i.text), ["Check the thing"]);
+test("a list named after the station is picked up without any setup", async () => {
+  // This is the point of matching by name: make "Powder booth" in the Roster
+  // and the powder booth finds it, no config change.
+  const t = fakeT({ "board/qcTemplates": { "Powder booth": [{ text: "Film thickness" }] } });
+  const r = await QC.checklistFor(t, {
+    id: "f2", table: "Powder booth", station: "Spray · powder coat",
+    phase: "Sandblast / Powder Coat"
+  });
+  assert.equal(r.name, "Powder booth");
 });
 
-test("with nothing saved anywhere, an Assemble station still gets a real list", async () => {
+test("two stations on one phase can work different lists", async () => {
+  const t = fakeT({
+    "board/qcTemplates": {
+      "Blast booth": [{ text: "Blast to near-white" }],
+      "Powder booth": [{ text: "Film thickness checked" }]
+    }
+  });
+  const blast = await QC.checklistFor(t, { id: "f1", table: "Blast booth", phase: "SPC" });
+  const powder = await QC.checklistFor(t, { id: "f2", table: "Powder booth", phase: "SPC" });
+  assert.notDeepEqual(blast.items.map((i) => i.text), powder.items.map((i) => i.text));
+});
+
+test("falling back to the phase's list, then to the shipped draft", async () => {
+  const byPhase = fakeT({ "board/qcTemplates": { "Assemble CNC": ["Check the thing"] } });
+  const r1 = await QC.checklistFor(byPhase, { id: "s3", table: "Station #3", phase: "Assemble CNC" });
+  assert.equal(r1.name, "Assemble CNC");
+  assert.deepEqual(r1.items.map((i) => i.text), ["Check the thing"]);
+
   // A station with no checklist has no gate, so the shipped draft matters.
+  const bare = fakeT();
+  const r2 = await QC.checklistFor(bare, { id: "s1", table: "Station #1", phase: "Assemble Legacy" });
+  assert.equal(r2.source, "draft");
+  assert.ok(r2.items.length >= 5);
+  assert.ok(r2.items.some((i) => i.spec), "and the tolerances came with it");
+});
+
+test("a list saved before tolerances existed still reads", async () => {
+  // Old entries are plain strings. Nobody should have to migrate anything.
+  const t = fakeT({ "board/qcTemplates": { "Assemble CNC": ["Plain string item"] } });
+  const lib = await QC.getLibrary(t);
+  assert.deepEqual(lib["Assemble CNC"], [{ text: "Plain string item", spec: "" }]);
+});
+
+test("the library can be added to, renamed and deleted", async () => {
   const t = fakeT();
-  const items = await QC.getStationChecklist(t, "s1", "Assemble Legacy");
-  assert.ok(items.length >= 5, "the shipped Assemble draft");
-  assert.ok(items.every((i) => i.text), "every line has text");
-  assert.ok(items.some((i) => i.spec), "and the tolerances came with them");
+  await QC.saveLibraryEntry(t, "Powder booth", [{ text: "Film thickness", spec: "2-4 mil" }]);
+  assert.deepEqual(await QC.libraryNames(t), ["Powder booth"]);
+
+  await QC.renameLibraryEntry(t, "Powder booth", "Powder line");
+  assert.deepEqual(await QC.libraryNames(t), ["Powder line"]);
+
+  await QC.deleteLibraryEntry(t, "Powder line");
+  assert.deepEqual(await QC.libraryNames(t), []);
+});
+
+test("a checklist cannot be saved without a name", async () => {
+  const t = fakeT();
+  await assert.rejects(() => QC.saveLibraryEntry(t, "   ", []), /needs a name/);
+});
+
+test("an empty list is a real choice and is kept", async () => {
+  // Created empty on purpose -- a list seeded with somebody else's items is one
+  // people delete line by line before they can use it.
+  const t = fakeT();
+  await QC.saveLibraryEntry(t, "Powder booth", []);
+  const r = await QC.checklistFor(t, { id: "f2", table: "Powder booth", phase: "SPC" });
+  assert.equal(r.name, "Powder booth");
+  assert.deepEqual(r.items, []);
+});
+
+test("a per-station list saved before the library existed still works", async () => {
+  // Read, never written to again. A board that saved one keeps its list.
+  const t = fakeT({ "board/wfQcChecklists": { f1: [{ text: "Legacy line" }] } });
+  const r = await QC.checklistFor(t, { id: "f1", table: "Blast booth", phase: "SPC" });
+  assert.equal(r.source, "legacy");
+  assert.deepEqual(r.items.map((i) => i.text), ["Legacy line"]);
 });
 
 test("all three Assemble routes start from the same bench list", () => {
@@ -135,20 +192,14 @@ test("all three Assemble routes start from the same bench list", () => {
   assert.deepEqual(legacy.map((i) => i.text), cap.map((i) => i.text));
 });
 
-test("a deliberately emptied station list is respected, not refilled", async () => {
-  const t = fakeT({ "board/wfQcChecklists": { s1: [] } });
-  const items = await QC.getStationChecklist(t, "s1", "Assemble Legacy");
-  assert.deepEqual(items, [], "an empty list is a choice, not a missing one");
-});
-
 test("saving accepts plain strings and item objects alike", async () => {
   const t = fakeT();
-  await QC.saveStationChecklist(t, "s1", [
+  await QC.saveLibraryEntry(t, "Welding", [
     "Just text",
     { text: "With a spec", spec: "±1/8″" },
     { text: "" }
   ]);
-  const saved = t.store["board/wfQcChecklists"].s1;
+  const saved = t.store["board/qcTemplates"]["Welding"];
   assert.equal(saved.length, 2, "the blank line is dropped");
   assert.deepEqual(saved[0], { text: "Just text", spec: "" });
   assert.deepEqual(saved[1], { text: "With a spec", spec: "±1/8″" });
@@ -200,6 +251,56 @@ test("the signed record keeps the tolerances, not just the ticks", async () => {
   // Editing the station's list later must not rewrite what was attested to.
   assert.equal(out.rec.rounds[0].items[0].spec, "Diagonals within 1/8″");
   assert.ok(out.rec.rounds[0].items.every((i) => i.result === "pass"));
+});
+
+test("signing signs, and does NOT ship the job", async () => {
+  // These were fused in the first cut, which meant the mock's "are you sure
+  // you're sending this to Sandblast?" question could never appear -- there was
+  // no moment between attesting to the work and letting go of it.
+  const t = fakeT({ "c1/phaseWork": { listId: "LA", claimedBy: KEV, segments: [] } });
+  let moved = 0;
+  win.WFRest.moveCard = () => { moved++; return Promise.resolve({}); };
+  win.WFRest.postComment = () => Promise.resolve({});
+
+  const rec = await QC.signOff(t, { id: "c1", idList: "LA", idBoard: "B" }, {
+    stationId: "s1", phase: "Assemble Legacy",
+    items: ITEMS, checked: allChecked,
+    signature: "Kevin Moss", signedBy: SCOTT, worker: KEV
+  });
+
+  assert.equal(rec.status, "passed", "the check itself passed");
+  assert.equal(moved, 0, "but the card has not moved anywhere");
+  assert.ok(!t.store["c1/phaseWork"].completedAt, "and the phase is still open");
+});
+
+test("passing refuses on a card nobody signed", async () => {
+  // This is the last gate between the bench and the next list, and there is no
+  // manager queue behind it to catch a mistake.
+  const t = fakeT();
+  await assert.rejects(
+    () => QC.passSigned(t, { id: "c1", idList: "LA", idBoard: "B" }, { idList: "LA" }),
+    /hasn't passed QC/);
+});
+
+test("passing a signed card moves it and credits the signer", async () => {
+  const t = fakeT({ "c1/phaseWork": { listId: "LA", claimedBy: KEV, segments: [] } });
+  const comments = [];
+  win.WFRest.moveCard = () => Promise.resolve({});
+  win.WFRest.postComment = (x, id, text) => { comments.push(text); return Promise.resolve({}); };
+
+  const card = {
+    idList: "LA",
+    qcRecord: {
+      listId: "LA", status: "passed", signedAt: new Date().toISOString(),
+      signature: "Kevin Moss", signedBy: SCOTT
+    }
+  };
+  await QC.passSigned(t, { id: "c1", idList: "LA", idBoard: "B" }, card);
+
+  // The audit trail names whoever actually looked at the work.
+  assert.ok(comments.some((c) => /Scott VanWorkom/.test(c)));
+  // And never claims the job is waiting on a manager, because it isn't.
+  assert.ok(!comments.some((c) => /awaiting manager approval/i.test(c)));
 });
 
 test("a signed record is found on the card, and only for its own list", () => {
