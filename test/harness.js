@@ -44,6 +44,7 @@ const LOAD_ORDER = [
   "lib/aging.js",
   "lib/records.js",
   "lib/cardview.js",
+  "lib/permissions.js",
   "popups/ops.js"
 ];
 
