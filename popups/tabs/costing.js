@@ -253,6 +253,10 @@
   O.tab({
     id: "costing",
     label: "Job costing",
+    // Lives in Performance's ribbon. Costing and Records are both "how did we
+    // do" rather than two destinations, and the top bar was past the point
+    // where anyone could find anything in it.
+    parent: "performance",
     roles: ["manager"],   // financials -- never shown to workers or office
     render: function (ctx) {
       // filter:'all' so finished and archived jobs count -- costing is a

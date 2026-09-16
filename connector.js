@@ -242,7 +242,7 @@ function boardButtons(t) {
   // One consolidated entry point. Everything that used to be its own board
   // button (Ops Dashboard, My Jobs, Manager Approvals, Team Performance,
   // Assign / Claim Work, Team Roster) is now a tab inside this window.
-  // Deep-link a specific tab with "./popups/ops.html#approvals".
+  // Deep-link a specific tab with "./popups/ops.html#records".
   return [
     {
       icon: ICON,

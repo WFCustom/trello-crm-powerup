@@ -680,6 +680,11 @@
   O.tab({
     id: "records",
     label: "Records",
+    // Nested under Performance, and it keeps its own rail inside -- Time,
+    // Quality, Safety, Training stay where they are. Two levels is right here:
+    // "how did we do" is the subject, Records is one way of answering it, and
+    // a safety report is a different question again from a time log.
+    parent: "performance",
     // Open to everyone: a worker gets Safety and Training. Time and Quality are
     // filtered out of the rail rather than the whole tab being locked.
     render: function (ctx) {

@@ -22,7 +22,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=Barlow+Condensed:wght@500;600;700&display=swap">
-  <link rel="stylesheet" href="../styles.css?v=20260916d">
+  <link rel="stylesheet" href="../styles.css?v=20260916e">
   <style>
     body { padding: 0; background: var(--wf-ground); }
   </style>
@@ -51,7 +51,7 @@
   <script>
     /* The one place the build number lives. Everything below is written out
        with it appended, so there is no list of URLs to keep in step. */
-    window.WF_BUILD = "20260916d";
+    window.WF_BUILD = "20260916e";
     document.write(
       [
         "../config.js",
@@ -86,13 +86,29 @@
         "./tabs/dashboard.js",
         "./tabs/workboard.js",
         "./tabs/myjobs.js",
-        "./tabs/qc.js",
-        "./tabs/approvals.js",
+
+        /* RETIRED, NOT DELETED: ./tabs/qc.js and ./tabs/approvals.js
+         *
+         * Quality check became redundant once signed checks are read in
+         * Records, and Approvals is the queue the checklist model replaced --
+         * a place work waited rather than a place anything was decided.
+         *
+         * The files stay in the repo and lib/qc.js still carries the older
+         * peer-review functions they used, so bringing either back is
+         * uncommenting one line. Deleting them would throw away a working
+         * review round-trip we may want again for a phase where a second pair
+         * of eyes is genuinely worth the wait.
+         *
+         * Nothing else references them: they registered themselves via O.tab
+         * on load, so not loading them is the whole retirement.
+         */
         "./tabs/performance.js",
+        /* Nested inside Performance's ribbon -- see their `parent` field. */
         "./tabs/costing.js",
+        "./tabs/records.js",
+
         "./tabs/sops.js",
         "./tabs/eos.js",
-        "./tabs/records.js",
         "./tabs/roster.js"
       ].map(function (src) {
         /* document.write rather than appending elements: these files are plain

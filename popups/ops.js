@@ -860,6 +860,8 @@
    */
   function visibleTabs() {
     var mine = tabs.filter(function (d) {
+      // Nested tabs belong to their parent's ribbon, not the top bar.
+      if (d.parent) return false;
       // Any one of the listed capabilities is enough. A tab that needs two
       // unrelated grants is a tab that should have been two tabs.
       if (d.caps && d.caps.length) {
@@ -1120,16 +1122,77 @@
     return renderActive();
   }
 
+  /**
+   * Tabs that live INSIDE another tab.
+   *
+   * A tab declares `parent: "performance"` and disappears from the top bar,
+   * reappearing as an entry in that parent's ribbon. The tab bar was growing
+   * past the point where anybody could find anything, and several of the
+   * entries were plainly facets of one subject rather than separate places --
+   * Job costing and Records are both "how did we do", not two destinations.
+   *
+   * Generic rather than a Performance special case, so grouping the next pair
+   * costs one line instead of another bespoke shell.
+   */
+  function childrenOf(id) {
+    return tabs.filter(function (d) {
+      if (d.parent !== id) return false;
+      if (d.caps && d.caps.length) return d.caps.some(function (c) { return can(c); });
+      if (d.roles) return d.roles.indexOf(ctx.role) !== -1;
+      if (d.managerOnly) return ctx.isManager;
+      return true;
+    });
+  }
+
+  /** Which entry of a parent's ribbon is open, remembered per parent. */
+  var subTab = {};
+
+  /**
+   * The ribbon. Same pills as the main bar on purpose -- one visual grammar for
+   * "these are the places you can be", whatever level you are at.
+   */
+  function ribbon(def, entries) {
+    var bar = el("div.wf-tabbar", {
+      style: "background:transparent;padding:0 0 18px;gap:8px;flex-wrap:wrap"
+    });
+    entries.forEach(function (e) {
+      var b = el("button.wf-tab" + (e.id === subTab[def.id] ? ".is-active" : ""), {
+        type: "button", text: e.label
+      });
+      b.addEventListener("click", function () {
+        if (subTab[def.id] === e.id) return;
+        subTab[def.id] = e.id;
+        renderActive();
+      });
+      bar.appendChild(b);
+    });
+    return bar;
+  }
+
   function renderActive() {
     var view = document.getElementById("view");
     var def = visibleTabs().filter(function (d) { return d.id === active; })[0] || visibleTabs()[0];
     if (!def) { view.innerHTML = '<div class="wf-empty">No tabs available for your account.</div>'; return; }
     active = def.id;
-    view.innerHTML = '<div class="loading">Loading ' + esc(def.label.toLowerCase()) + "…</div>";
+
+    // The parent's own content is the first entry, so Performance still opens
+    // on Performance and the ribbon is an addition rather than a detour.
+    var kids = childrenOf(def.id);
+    var entries = kids.length ? [{ id: def.id, label: def.label, def: def }].concat(
+      kids.map(function (k) { return { id: k.id, label: k.label, def: k }; })) : [];
+    if (entries.length && !entries.some(function (e) { return e.id === subTab[def.id]; })) {
+      subTab[def.id] = def.id;
+    }
+    var showing = entries.length
+      ? entries.filter(function (e) { return e.id === subTab[def.id]; })[0].def
+      : def;
+
+    view.innerHTML = '<div class="loading">Loading ' + esc(showing.label.toLowerCase()) + "…</div>";
     return Promise.resolve()
-      .then(function () { return def.render(ctx); })
+      .then(function () { return showing.render(ctx); })
       .then(function (node) {
         view.innerHTML = "";
+        if (entries.length) view.appendChild(ribbon(def, entries));
         view.appendChild(node || empty("Nothing to show here yet."));
         paintTabs();
       })
@@ -1213,9 +1276,12 @@
         paintSandbox();
 
         // Come back where you left off. Precedence: an explicit deep link
-        // (#approvals) beats the remembered tab, which beats the role default.
+        // (#records) beats the remembered tab, which beats the role default.
         // The remembered tab is what makes closing the window and returning
         // from a card feel like resuming rather than starting over.
+        //
+        // A link or a remembered id naming a retired tab is harmless --
+        // renderActive falls back to the first tab this person can see.
         var linked = (global.location.hash || "").replace("#", "");
         return (linked
           ? Promise.resolve(linked)
