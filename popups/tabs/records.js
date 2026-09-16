@@ -72,13 +72,18 @@
    * rather than a tab that refuses to open.
    */
   var SECTIONS = [
-    { id: "time", label: "Time", roles: ["manager", "office"] },
-    { id: "quality", label: "Quality", roles: ["manager", "office"] },
-    { id: "safety", label: "Safety" },
+    { id: "time", label: "Time", cap: "see.timers", roles: ["manager", "office"] },
+    { id: "quality", label: "Quality", cap: "qc.sign", roles: ["manager", "office"] },
+    { id: "safety", label: "Safety", cap: "safety.view" },
     { id: "training", label: "Training" }
   ];
 
   function allowed(ctx, s) {
+    // The board's own answer when there is one, the old fixed one otherwise.
+    // Safety is the case that makes this worth doing: everyone may FILE a
+    // report, and who may READ them is a decision this shop should own rather
+    // than inherit from a role name I chose.
+    if (s.cap && typeof ctx.can === "function") return ctx.can(s.cap);
     return !s.roles || s.roles.indexOf(ctx.role) !== -1;
   }
 

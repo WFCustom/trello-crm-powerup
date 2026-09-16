@@ -841,15 +841,30 @@
   }
 
   /**
-   * Tabs declare who they're for with `roles: ["manager", "office"]`.
-   * Anything undeclared is visible to everyone, so a worker's default view is
-   * their own queue and nothing financial. `managerOnly` still works.
+   * Which tabs this person gets.
+   *
+   * Three ways to declare it, in order of precedence:
+   *
+   *   caps: ["see.costing"]   the board's own permission settings decide. This
+   *                           is the one to use -- it can be changed on a
+   *                           Tuesday without a release.
+   *   roles: ["manager"]      the old fixed answer, kept so nothing breaks
+   *                           mid-migration.
+   *   managerOnly: true       older still.
+   *
+   * Undeclared means everyone, so a worker's default view is their own queue
+   * and nothing financial.
    *
    * This is relevance, not security -- it decides what the window shows, and a
    * determined person can still read the underlying card through Trello itself.
    */
   function visibleTabs() {
     var mine = tabs.filter(function (d) {
+      // Any one of the listed capabilities is enough. A tab that needs two
+      // unrelated grants is a tab that should have been two tabs.
+      if (d.caps && d.caps.length) {
+        return d.caps.some(function (c) { return can(c); });
+      }
       if (d.roles) return d.roles.indexOf(ctx.role) !== -1;
       if (d.managerOnly) return ctx.isManager;
       return true;

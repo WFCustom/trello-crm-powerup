@@ -282,6 +282,48 @@ test("a context with no permissions loaded falls back rather than opening up", (
   assert.equal(V.canSeeMoney("worker"), false);
 });
 
+/* ================================================ tabs and sections obey it */
+
+test("a capability beats a role when a tab declares both", () => {
+  // Every tab keeps its `roles:` as a fallback so nothing breaks mid-migration,
+  // but once a board has an opinion, the board wins.
+  const decide = (d, can, role) => {
+    if (d.caps && d.caps.length) return d.caps.some(can);
+    if (d.roles) return d.roles.indexOf(role) !== -1;
+    if (d.managerOnly) return role === "manager";
+    return true;
+  };
+
+  const dash = { caps: ["see.costing"], roles: ["manager"] };
+  // Not a manager, but granted costing: they get it.
+  assert.equal(decide(dash, (c) => c === "see.costing", "office"), true);
+  // A manager whose board took costing away: they don't.
+  assert.equal(decide(dash, () => false, "manager"), false);
+
+  // Undeclared stays everyone's.
+  assert.equal(decide({}, () => false, "worker"), true);
+});
+
+test("the margin figure is withheld, not blanked", () => {
+  // A dash where a number should be still tells you there is a number and that
+  // you are not allowed it. Showing a different, harmless figure doesn't.
+  const withMargin = { can: () => true };
+  const without = { can: (c) => c !== "see.margins" };
+  assert.equal(withMargin.can("see.margins"), true);
+  assert.equal(without.can("see.margins"), false);
+  assert.equal(without.can("see.costing"), true, "they still run the floor from here");
+});
+
+test("who may READ safety reports is a grant; filing one never is", () => {
+  const cfg = P.defaults();
+  cfg.people.mike = { preset: "worker", caps: {} };
+  // A worker cannot read the pile -- reports name people and describe injuries.
+  assert.equal(P.can(cfg, "mike", "safety.view"), false);
+  // But nothing in the model gates filing, including anonymously. If it did,
+  // the reports that matter most would be the ones that never got written.
+  assert.equal(P.capById("safety.file"), null, "there is deliberately no such grant");
+});
+
 test("scopes compare by strength", () => {
   assert.equal(P.atLeast("all", "own"), true);
   assert.equal(P.atLeast("own", "area"), false);

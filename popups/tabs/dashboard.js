@@ -346,7 +346,11 @@
   O.tab({
     id: "dashboard",
     label: "Dashboard",
-    roles: ["manager"],   // carries margin figures
+    // Whoever may see costing gets the page; the margin panel inside is a
+    // separate, stronger grant. Splitting the two is what lets a shop manager
+    // run the floor from here without being shown company profitability.
+    caps: ["see.costing"],
+    roles: ["manager"],   // fallback while permissions are still bedding in
     render: function (ctx) {
       return Promise.all([
         ctx.cards(),
@@ -390,9 +394,16 @@
             f.late + f.atRisk > 0),
             ctx, "Won't make it", pick(["late", "at-risk"])),
           O.stat("Waiting on you", s.pendingApproval, "phases need your sign-off"),
-          O.stat("Margin on open work",
-            marginPct == null ? "—" : marginPct + "%",
-            O.moneyShort(s.value) + " booked · " + s.priced + " priced"));
+          // Company profitability is a stronger grant than seeing what a job is
+          // worth, and it is the figure the standing instruction keeps off
+          // other people's screens. Left out entirely rather than shown as a
+          // dash -- a blanked-out number still tells you there is a number.
+          (!ctx.can || ctx.can("see.margins"))
+            ? O.stat("Margin on open work",
+                marginPct == null ? "—" : marginPct + "%",
+                O.moneyShort(s.value) + " booked · " + s.priced + " priced")
+            : O.stat("Open work", s.priced,
+                "jobs with a value on the card"));
 
         var occupancy = O.panel("Where the work is sitting", "jobs per phase");
         occupancy.body(bars(s.byStage));
