@@ -810,7 +810,9 @@
    * they can't quietly buy themselves a week.
    */
   function canSchedule() {
-    return state.ctx.role === "manager" || state.ctx.role === "office";
+    var ctx = state.ctx;
+    if (typeof ctx.can === "function") return ctx.can("edit.due");
+    return ctx.role === "manager" || ctx.role === "office";
   }
 
   /**

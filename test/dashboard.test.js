@@ -105,6 +105,7 @@ function boot({ role = "manager", cards = [], moves = {} } = {}) {
   win.eval(read("lib/phase.js"));
   win.eval(read("lib/aging.js"));
   win.eval(read("lib/cardview.js"));
+  win.eval(read("lib/permissions.js"));
   win.eval(read("popups/ops.js"));
   win.eval(read("popups/cardpanel.js"));
 

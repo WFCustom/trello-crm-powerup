@@ -235,6 +235,53 @@ test("capabilities are grouped for the screen, and say what they mean", () => {
   assert.equal(P.capById("see.costing").scoped, true);
 });
 
+/* ============================================ the card panel obeys the board */
+
+test("the money rule reads the board's settings, not a rule baked into the code", () => {
+  const V = win.WFCardView;
+  const fields = [
+    { name: "Style", display: "RG-4 picket" },
+    { name: "$Value", display: "42500" }
+  ];
+
+  // A context carrying `can` is the real path. Here the board says yes.
+  const allowed = { can: (cap) => cap === "see.costing" };
+  assert.equal(V.visibleFields(fields, allowed).length, 2);
+
+  // And here the same person's board says no. Nothing about their ROLE changed.
+  const denied = { can: () => false };
+  assert.deepEqual(V.visibleFields(fields, denied).map((f) => f.name), ["Style"]);
+});
+
+test("office no longer means money just by being office", () => {
+  const V = win.WFCardView;
+  // Under the three tiers, costing is a grant somebody was given rather than a
+  // side effect of not being on the shop floor. The old string path is kept for
+  // callers that predate permissions, and still answers the old way.
+  assert.equal(V.canSeeMoney("office"), true, "legacy string path unchanged");
+  assert.equal(V.canSeeMoney({ can: () => false }), false, "the board decides now");
+});
+
+test("edit rights come from grants, and the shop keeps ticking and commenting", () => {
+  const V = win.WFCardView;
+  const ctx = { can: (cap) => cap === "edit.due" };
+  const r = V.editRights(ctx);
+  assert.equal(r.due, true);
+  assert.equal(r.title, false, "edit.card was not granted");
+  // These two are never gated: a checklist somebody can't tick is a checklist
+  // that stops being worked, and a note is how the shop reports a problem.
+  assert.equal(r.checkItems, true);
+  assert.equal(r.comment, true);
+});
+
+test("a context with no permissions loaded falls back rather than opening up", () => {
+  const V = win.WFCardView;
+  // The dangerous failure is the one that grants; make sure it denies.
+  assert.equal(V.canSeeMoney(undefined), false);
+  assert.equal(V.canSeeMoney({}), false);
+  assert.equal(V.canSeeMoney("worker"), false);
+});
+
 test("scopes compare by strength", () => {
   assert.equal(P.atLeast("all", "own"), true);
   assert.equal(P.atLeast("own", "area"), false);

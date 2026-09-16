@@ -102,6 +102,9 @@ function boot({ role = "worker", cards = [], saved = null } = {}) {
   win.eval(read("lib/qc.js"));
   win.eval(read("lib/tables.js"));
   win.eval(read("lib/cardview.js"));
+  // ops.js reads permissions at startup and on reload, so the module has to be
+  // present even though these fixtures drive render() directly.
+  win.eval(read("lib/permissions.js"));
   win.eval(read("popups/ops.js"));
   win.eval(read("popups/cardpanel.js"));
 

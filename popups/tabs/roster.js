@@ -119,6 +119,171 @@
    * checks only, because a check snapshots the list when it opens -- adding an
    * item later must not make an already-signed check look incomplete.
    */
+  /* ===================================================== who sees what
+   *
+   * Lives in the Roster because this is a fact about people, and because the
+   * tab bar is already too long to earn another entry. Only somebody holding
+   * `permissions.manage` sees any of it.
+   */
+
+  /**
+   * The preset editor: a grid of capability against scope.
+   *
+   * Presets are edited rather than chosen from, because the whole point is that
+   * the owner decides what "shop manager" means at this company rather than
+   * inheriting what it meant at mine.
+   */
+  function permsBlock(ctx, perms) {
+    var cfg = JSON.parse(JSON.stringify(perms));
+    var wrap = O.el("div");
+    var note = O.el("div.hint", { style: "margin-top:8px" });
+
+    var chosen = O.el("select", { style: "width:auto;padding:6px 10px;border-radius:9px" });
+    WFPerms.presetIds(cfg).forEach(function (id) {
+      chosen.appendChild(O.el("option", { value: id, text: cfg.presets[id].label || id }));
+    });
+
+    var grid = O.el("div");
+    function paintGrid() {
+      var preset = cfg.presets[chosen.value];
+      grid.innerHTML = "";
+      if (!preset) return;
+
+      grid.appendChild(O.el("div.hint", { style: "margin-bottom:10px", text: preset.note || "" }));
+
+      WFPerms.groups().forEach(function (group) {
+        grid.appendChild(O.el("div.wf-card-s", {
+          style: "margin-top:12px;font-weight:700;text-transform:uppercase;letter-spacing:.07em",
+          text: group
+        }));
+
+        WFPerms.caps().filter(function (c) { return c.group === group; }).forEach(function (cap) {
+          var current = preset.caps[cap.id] || "none";
+
+          var pick = O.el("select", { style: "width:auto;padding:4px 8px;border-radius:8px" });
+          var options = cap.scoped
+            ? ["none", "own", "crew", "area", "all"]
+            : ["none", "all"];
+          options.forEach(function (s) {
+            var text = s === "none" ? "No"
+              : s === "all" ? (cap.scoped ? "Everyone's" : "Yes")
+              : s === "own" ? "Only their own"
+              : s === "crew" ? "Their crew"
+              : "Their area";
+            var o = O.el("option", { value: s, text: text });
+            if (s === current) o.selected = true;
+            pick.appendChild(o);
+          });
+
+          pick.addEventListener("change", function () {
+            if (pick.value === "none") delete preset.caps[cap.id];
+            else preset.caps[cap.id] = pick.value;
+            // The lockout guard runs on every change, not only on save, so the
+            // screen can never show you a state it would refuse to store.
+            WFPerms.guard(cfg);
+            note.textContent = lockNote(cfg, chosen.value, cap.id);
+          });
+
+          var row = O.el("div", {
+            style: "display:flex;gap:10px;align-items:baseline;padding:5px 0;flex-wrap:wrap"
+          },
+            O.el("div", { style: "flex:1 1 260px;min-width:0" },
+              O.el("div", { style: "font-size:13.5px;font-weight:600", text: cap.label }),
+              cap.note ? O.el("div.hint", { text: cap.note }) : null),
+            pick);
+          grid.appendChild(row);
+        });
+      });
+    }
+
+    chosen.addEventListener("change", function () { paintGrid(); note.textContent = ""; });
+    paintGrid();
+
+    return O.el("div.phase-block", null,
+      O.el("div", { style: "display:flex;align-items:center;gap:10px;flex-wrap:wrap" },
+        O.el("h3", { style: "margin:0", text: "What each group can do" }),
+        chosen),
+      O.el("div.hint", { style: "margin-top:6px", text:
+        "This decides what people are shown, not what a determined person could " +
+        "extract from a browser. Trello's own board permissions are the real " +
+        "enforcement — treat this as focus, not a lock." }),
+      grid,
+      note,
+      O.el("div", { style: "margin-top:12px" },
+        O.btn("Save permissions", {
+          primary: true, busyText: "Saving…",
+          onClick: function () { return WFPerms.save(ctx.t, cfg).then(ctx.reload); }
+        })));
+  }
+
+  /** Say so out loud when the guard has put something back. */
+  function lockNote(cfg, presetId, capId) {
+    if (capId !== "permissions.manage") return "";
+    if (cfg.presets[presetId] && cfg.presets[presetId].caps["permissions.manage"]) return "";
+    var holders = WFPerms.presetIds(cfg).filter(function (id) {
+      return cfg.presets[id].caps["permissions.manage"];
+    });
+    if (holders.indexOf(presetId) !== -1) {
+      return "Put back — somebody has to be able to reach this screen.";
+    }
+    return "Still held by: " + holders.map(function (id) {
+      return cfg.presets[id].label || id;
+    }).join(", ") + ".";
+  }
+
+  /**
+   * Which preset each person is on, and whether they have been adjusted.
+   *
+   * A per-person override is deliberately NOT edited here. Naming who is a shop
+   * manager is an everyday decision; carving an exception into one person's
+   * grants is a rare one, and putting both on the same screen makes the rare
+   * one look routine.
+   */
+  function peoplePerms(ctx, perms, members) {
+    var cfg = JSON.parse(JSON.stringify(perms));
+    var rows = O.el("div");
+
+    members.forEach(function (m) {
+      var pick = O.el("select", { style: "width:auto;padding:4px 8px;border-radius:8px" });
+      WFPerms.presetIds(cfg).forEach(function (id) {
+        var o = O.el("option", { value: id, text: cfg.presets[id].label || id });
+        if (id === WFPerms.presetOf(cfg, m.username)) o.selected = true;
+        pick.appendChild(o);
+      });
+      pick.addEventListener("change", function () {
+        cfg.people[m.username] = cfg.people[m.username] || { preset: "worker", caps: {} };
+        cfg.people[m.username].preset = pick.value;
+      });
+
+      var tags = [];
+      if (WFPerms.isFloor(m.username)) {
+        tags.push(O.tag("always everything", "go"));
+        pick.disabled = true;
+      }
+      if (WFPerms.isCustomised(cfg, m.username)) tags.push(O.tag("adjusted", "warn"));
+
+      rows.appendChild(O.el("div", {
+        style: "display:flex;gap:10px;align-items:center;padding:6px 0;flex-wrap:wrap"
+      },
+        O.el("div", { style: "flex:1 1 200px", text: label(m) }),
+        pick,
+        O.el("div.wf-actions", null, tags)));
+    });
+
+    return O.el("div.phase-block", null,
+      O.el("h3", { style: "margin:0", text: "Who is in which group" }),
+      O.el("div.hint", { style: "margin-top:6px", text:
+        "People named as managers in config.js always hold everything — that is " +
+        "the floor that makes a bad save recoverable, and it can't be switched " +
+        "off from here." }),
+      rows,
+      O.el("div", { style: "margin-top:12px" },
+        O.btn("Save groups", {
+          primary: true, busyText: "Saving…",
+          onClick: function () { return WFPerms.save(ctx.t, cfg).then(ctx.reload); }
+        })));
+  }
+
   /** Make a new list from nothing. This is the thing that stops needing code. */
   function newChecklistRow(ctx, templates) {
     var name = O.el("input", {
@@ -387,6 +552,22 @@
           qcGrid.appendChild(qcTemplateBlock(ctx, { name: n, custom: true }, qcTemplates));
         });
         out.appendChild(qcGrid);
+
+        /* Permissions, for whoever holds the key to them. Gated on the
+           capability rather than on a role, so the screen that decides who can
+           do what is itself governed by the same answer. */
+        if (ctx.can && ctx.can("permissions.manage") && ctx.perms) {
+          out.appendChild(O.el("div.wf-group-h", { style: "margin-top:28px" },
+            O.el("div.wf-group-t", { text: "Who sees what" }),
+            O.el("span.wf-group-n", {
+              text: WFPerms.presetIds(ctx.perms).length + " groups · " +
+                    WFPerms.caps().length + " things to grant"
+            })));
+          var permGrid = O.el("div.wf-panels.halves", { style: "margin-bottom:20px" });
+          permGrid.appendChild(permsBlock(ctx, ctx.perms));
+          permGrid.appendChild(peoplePerms(ctx, ctx.perms, members));
+          out.appendChild(permGrid);
+        }
 
         out.appendChild(O.el("p.muted", { text:
           "Managers and specialists save to this board, so every board can have its own crew. " +

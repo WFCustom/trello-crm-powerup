@@ -113,6 +113,7 @@ function boot({ cards = [], actions = [], fields = [], audit = [] } = {}) {
   win.eval(read("lib/phase.js"));
   win.eval(read("lib/aging.js"));
   win.eval(read("lib/cardview.js"));
+  win.eval(read("lib/permissions.js"));
   win.eval(read("popups/ops.js"));
   win.eval(read("popups/cardpanel.js"));
 

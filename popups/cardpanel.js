@@ -197,7 +197,10 @@
    */
   function body(ctx, card, opts) {
     opts = opts || {};
-    var rights = V.editRights(ctx.role);
+    // Hand over the whole context, not the role: it carries `can`, which is
+    // the board's own permission settings rather than a rule I baked in.
+    // Falls back to the role string when the caller predates permissions.
+    var rights = V.editRights(typeof ctx.can === "function" ? ctx : ctx.role);
     var wrap = O.el("div.wf-cp-body");
 
     /* cover -------------------------------------------------------------- */
@@ -272,7 +275,7 @@
     wrap.appendChild(fieldsCell);
     WFRest.getCardFieldsDisplay(ctx.t, card.idBoard || ctx.board.id, card.id)
       .then(function (list) {
-        var shown = V.visibleFields(list, ctx.role);
+        var shown = V.visibleFields(list, typeof ctx.can === "function" ? ctx : ctx.role);
         var hidden = (list || []).length - shown.length;
         fieldsCell.textContent = "";
         fieldsCell.className = "";

@@ -40,6 +40,34 @@
   var realMember = null;
   var actingAs = null;
 
+  /**
+   * Who sees what, read once at startup and re-read on every reload.
+   *
+   * Every role check in every tab goes through `ctx.can` rather than asking
+   * about roles directly. That is the point of the exercise: the answer to
+   * "may this person see costing" used to live in four files with four slightly
+   * different spellings, and changing it needed a release.
+   */
+  var perms = null;
+
+  /**
+   * May the current person do this, and -- if a subject is given -- to this
+   * particular record?
+   *
+   * Fails closed. A missing config or an unknown capability is "no", because
+   * every other direction of failure hands somebody something they were not
+   * meant to have.
+   */
+  function can(capId, subject) {
+    if (!perms || !ctx || !ctx.member) return false;
+    return WFPerms.allows(perms, ctx.member.username, capId, subject);
+  }
+
+  function scopeFor(capId) {
+    if (!perms || !ctx || !ctx.member) return "none";
+    return WFPerms.scopeFor(perms, ctx.member.username, capId);
+  }
+
   /* ----------------------------------------------------------- dom helpers */
 
   function esc(s) {
@@ -592,12 +620,19 @@
     // takes effect immediately -- tabs appear/disappear on the spot rather than
     // waiting for the window to be reopened. Previously ctx.roster was read once
     // at startup, so edits had no visible effect at all.
-    return WFRoster.getRoster(t).then(function (r) {
-      if (r) {
-        ctx.roster = r;
-        ctx.role = resolveRole(r, ctx.member.username);
+    return Promise.all([
+      WFRoster.getRoster(t),
+      // Re-read permissions here too, so an edit on the Roster takes effect the
+      // moment it is saved rather than on the next window. A permission change
+      // nobody can see happen is a permission change people repeat.
+      WFPerms.load(t).catch(function () { return perms; })
+    ]).then(function (r) {
+      if (r[0]) {
+        ctx.roster = r[0];
+        ctx.role = resolveRole(r[0], ctx.member.username);
         ctx.isManager = ctx.role === "manager";
       }
+      if (r[1]) { perms = r[1]; ctx.perms = perms; }
     }).catch(function () { /* keep whatever we had */ })
       .then(function () { return renderActive(); });
   }
@@ -1122,11 +1157,13 @@
         t.member("username", "fullName"),
         WFRoster.getRoster(t).catch(function () { return { managers: [], phaseSpecialists: {} }; }),
         t.get("board", "shared", BOARD_ORDER_KEY, null).catch(function () { return null; }),
-        t.get("member", "private", MY_ORDER_KEY, null).catch(function () { return null; })
+        t.get("member", "private", MY_ORDER_KEY, null).catch(function () { return null; }),
+        WFPerms.load(t).catch(function () { return WFPerms.defaults(); })
       ]).then(function (r) {
         var board = r[0], member = r[1], roster = r[2];
         boardOrder = Array.isArray(r[3]) && r[3].length ? r[3] : null;
         myOrder = Array.isArray(r[4]) && r[4].length ? r[4] : null;
+        perms = r[5];
 
         document.getElementById("boardName").textContent = board.name;
         document.getElementById("meName").textContent = (member.fullName || member.username).split(" ")[0];
@@ -1145,6 +1182,9 @@
           roster: roster,
           role: resolveRole(roster, member.username),
           isManager: resolveRole(roster, member.username) === "manager",
+          perms: perms,
+          can: can,
+          scopeFor: scopeFor,
           cards: cards,
           reload: reload,
           syncCard: syncCard,
