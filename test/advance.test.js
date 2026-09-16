@@ -91,9 +91,19 @@ function captureMoves(w, opts) {
   return moves;
 }
 
-/** What the card's "Job Type" custom field reads as. */
+/**
+ * What the card's "Job Type" custom field reads as.
+ *
+ * Shaped like getCardFieldsDisplay's real output -- a flat list of every custom
+ * field resolved to its display string. It used to stub getNamedCustomFieldValues,
+ * which returns only jobValue/jobCost/leadReceivedAt and therefore could never
+ * carry a job type: the stub was the only reason routing appeared to work.
+ */
 function jobTypeReads(value) {
-  win.WFRest.getNamedCustomFieldValues = () => Promise.resolve({ "Job Type": value });
+  win.WFRest.getCardFieldsDisplay = () => Promise.resolve([
+    { name: "Style", display: "RG-4 picket" },
+    { name: "Job Type", display: value }
+  ]);
 }
 
 /* ========================================================= the patch is on */
@@ -126,18 +136,52 @@ test("a CNC job leaving CAD goes to Assemble CNC, not to the next column", async
 test("a card whose job type cannot be read still advances rather than stalling", async () => {
   // The field is missing from the card: an unlabelled job keeps the full
   // legacy route, so from CAD it goes on to Print CAD.
-  win.WFRest.getNamedCustomFieldValues = () =>
-    Promise.resolve({ jobValue: null, jobCost: null, leadReceivedAt: null });
+  win.WFRest.getCardFieldsDisplay = () =>
+    Promise.resolve([{ name: "Style", display: "RG-4 picket" }]);
   const moves = captureMoves(win);
   await win.WFPhase.approveAndAdvance(awaitingApproval(CAD), card(CAD), MANAGER);
   assert.deepStrictEqual(moves, [PRINT_CAD]);
 
   // And the same when the lookup itself fails -- a dead REST call must not
   // leave the job parked.
-  win.WFRest.getNamedCustomFieldValues = () => Promise.reject(new Error("no network"));
+  win.WFRest.getCardFieldsDisplay = () => Promise.reject(new Error("no network"));
   const afterFailure = captureMoves(win);
   await win.WFPhase.approveAndAdvance(awaitingApproval(CAD), card(CAD), MANAGER);
   assert.deepStrictEqual(afterFailure, [PRINT_CAD]);
+});
+
+test("the job type is read from a source that can actually carry it", async () => {
+  /* THE REGRESSION THIS EXISTS FOR.
+   *
+   * For a long time advance.js asked getNamedCustomFieldValues for "Job Type".
+   * That function returns exactly three keys -- jobValue, jobCost,
+   * leadReceivedAt -- and never a job type, so the lookup always missed, every
+   * card read as untyped, and every card took the default legacy route. CNC and
+   * CAP work routed down the wrong path on a live board for weeks, and nothing
+   * anywhere reported a problem, because falling back to a valid route looks
+   * exactly like working.
+   *
+   * So this asserts the SHAPE of the dependency, not just an outcome: whatever
+   * advance.js reads must be capable of returning a field called "Job Type".
+   */
+  const shaped = win.WFRest.getNamedCustomFieldValues
+    ? await win.WFRest.getNamedCustomFieldValues({}, "B", "c1").catch(() => ({}))
+    : {};
+  assert.ok(!("Job Type" in shaped),
+    "getNamedCustomFieldValues still cannot carry a job type — reading it from there is the bug");
+
+  // And prove the type genuinely changes the destination: if routing were still
+  // hard-stuck on legacy, these two would land in the same place.
+  jobTypeReads("CNC only");
+  const cnc = captureMoves(win);
+  await win.WFPhase.approveAndAdvance(awaitingApproval(CAD), card(CAD), MANAGER);
+
+  jobTypeReads("Legacy railing");
+  const legacy = captureMoves(win);
+  await win.WFPhase.approveAndAdvance(awaitingApproval(CAD), card(CAD), MANAGER);
+
+  assert.notDeepStrictEqual(cnc, legacy,
+    "two different job types must not route to the same next phase");
 });
 
 test("a card in a list the board config does not map falls through to the original approve", async () => {
