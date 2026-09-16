@@ -8,11 +8,14 @@
    time-in-stage from Trello's move history and asks the question a manager
    actually has: will this job make its date? Every row shows the subtraction.
 
-   Rows open a peek panel rather than throwing you into another tab, and the
-   peek reads the board's custom fields live -- so job value and cost come off
-   the card, not out of a guess.
+   NOTHING HERE IS A DEAD END. Every count is a button: the meter's legend and
+   the stat tiles open the list of jobs behind the number, and any job in that
+   list opens the card itself -- cover, fields, checklist, comments, editable --
+   in the same overlay, with Back returning you to the list you came from. The
+   old version could tell you four jobs were in trouble and offered no way to
+   ask which four except leaving for Trello and losing the page.
 
-   Wired to WFAging, WFStage, WFPricing, WFRest. */
+   Wired to WFAging, WFStage, WFPricing, WFRest, WFCardPanel. */
 (function () {
   "use strict";
   var O = WFOps;
@@ -105,29 +108,141 @@
    * with no due date can't be forecast at all, and that is a data problem worth
    * seeing rather than hiding in the on-track bucket.
    */
-  function meter(f) {
+  function meter(ctx, f) {
     var total = f.total || 1;
     var seg = function (n, color) {
       return O.el("div", { style: "width:" + (n / total) * 100 + "%;background:" + color });
     };
+    // [label, count, colour, the verdicts this slice stands for]
     var legend = [
-      ["On track", f.onTrack, "#1f4e79"],
-      ["Cutting it fine", f.tight, "#d98324"],
-      ["Won't make it", f.atRisk, "#c8471c"],
-      ["Past its date", f.late, "#8f2f0f"],
-      ["No date set", f.noDate, "#e6ecf2"]
+      ["On track", f.onTrack, "#1f4e79", ["on-track"]],
+      ["Cutting it fine", f.tight, "#d98324", ["tight"]],
+      ["Won't make it", f.atRisk, "#c8471c", ["at-risk"]],
+      ["Past its date", f.late, "#8f2f0f", ["late"]],
+      ["No date set", f.noDate, "#e6ecf2", ["no-date", "unmapped"]]
     ];
     return O.frag(
       O.el("div.wf-meter", null,
         seg(f.onTrack, "#1f4e79"), seg(f.tight, "#d98324"),
         seg(f.atRisk, "#c8471c"), seg(f.late, "#8f2f0f"),
         seg(f.noDate, "#e6ecf2")),
+      // Each legend row is a button. The count was always the interesting part
+      // and it was the one thing you couldn't act on -- "4 jobs won't make it"
+      // is only useful once you can ask which four.
       O.el("div.wf-legend", null, legend.map(function (r) {
-        return O.el("div.wf-legend-row", null,
+        var dead = !r[1];
+        return O.el("button.wf-legend-row" + (dead ? "" : ".is-live"), {
+          type: "button",
+          disabled: dead,
+          title: dead ? "" : "Show these " + r[1] + " jobs",
+          style: "width:100%;text-align:left;font:inherit;color:inherit;border:0;" +
+                 "background:none;padding:3px 4px;border-radius:8px;" +
+                 (dead ? "opacity:.55" : "cursor:pointer"),
+          onClick: dead ? null : function () {
+            openDrill(ctx, r[0], f.worstFirst.filter(function (row) {
+              return r[3].indexOf(row.forecast.verdict) !== -1;
+            }));
+          }
+        },
           O.el("span.wf-dot", { style: "background:" + r[2] }),
           document.createTextNode(r[0]),
           O.el("span.wf-legend-n", { text: r[1] + (r[1] === 1 ? " job" : " jobs") }));
       })));
+  }
+
+  /* ------------------------------------------------------------- the drill-down */
+
+  /**
+   * "Which four?" -- the jobs behind a number, and then the card behind a job,
+   * without ever leaving the dashboard.
+   *
+   * One overlay with two modes rather than two stacked overlays: picking a job
+   * replaces the list with the card panel and leaves a "Back to list" control,
+   * so the way out is the way you came in. Stacking dialogs would give you two
+   * Escape presses and two things to close, on a screen somebody is reading
+   * between other tasks.
+   */
+  function openDrill(ctx, title, rows) {
+    WFCardPanel.ensureStyles();
+
+    var back = O.el("div.wf-cp-sheet");
+    function close() {
+      document.removeEventListener("keydown", onKey, true);
+      if (back.parentNode) back.parentNode.removeChild(back);
+    }
+    function onKey(e) {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      // Escape from a card goes back to the list; escape from the list closes.
+      if (mode === "card") showList(); else close();
+    }
+
+    var shell = O.el("div.wf-cp");
+    var mode = "list";
+
+    function showList() {
+      mode = "list";
+      shell.textContent = "";
+
+      var head = O.el("div.wf-cp-head", null,
+        O.el("div.wf-cp-kicker", { text: title }),
+        O.el("div.wf-cp-crumb", {
+          text: rows.length + (rows.length === 1 ? " job" : " jobs") + " · worst first"
+        }));
+      head.appendChild(O.el("button.wf-cp-x", {
+        type: "button", text: "×", title: "Close", onClick: close
+      }));
+      shell.appendChild(head);
+
+      var body = O.el("div.wf-cp-body");
+      if (!rows.length) {
+        body.appendChild(O.el("div.wf-cp-note", { text: "Nothing in this bucket." }));
+      }
+      rows.forEach(function (r) {
+        var fc = r.forecast;
+        var work = O.activeWork(r.card);
+        var who = work && work.claimedBy ? O.displayName(work.claimedBy) : "nobody yet";
+        body.appendChild(O.el("button.wf-cp-file", {
+          type: "button",
+          style: "flex-direction:column;align-items:flex-start;gap:3px;padding:10px 12px",
+          onClick: function () { showCard(r); }
+        },
+          O.el("div", { style: "font-weight:700;font-size:14px", text: r.card.name }),
+          O.el("div.wf-cp-note", {
+            text: (r.stage.phase || r.stage.name) + " · " +
+                  WFAging.stagePhrase(fc.inStage) + " · " + who
+          }),
+          O.el("div.wf-cp-note" + (fc.verdict === "on-track" ? "" : ".is-bad"), {
+            text: WFAging.explain(fc)
+          })));
+      });
+      shell.appendChild(body);
+    }
+
+    function showCard(r) {
+      mode = "card";
+      shell.textContent = "";
+      // The panel is its own .wf-cp, so hand its children over rather than
+      // nesting a card inside a card and inheriting two sets of padding.
+      var panel = WFCardPanel.inline(ctx, r.card, {
+        kicker: "Trello card",
+        backLabel: "‹ Back",
+        onBack: showList,
+        footer: function () {
+          return O.el("div.wf-cp-note", {
+            text: WFAging.verdictText(r.forecast.verdict) + " — " + WFAging.explain(r.forecast)
+          });
+        }
+      });
+      while (panel.firstChild) shell.appendChild(panel.firstChild);
+    }
+
+    showList();
+    back.appendChild(shell);
+    back.addEventListener("click", function (e) { if (e.target === back) close(); });
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(back);
+    return { close: close };
   }
 
   /**
@@ -158,7 +273,18 @@
       type: "button",
       style: "grid-template-columns:1.7fr 150px 150px auto;width:100%;text-align:left;" +
              "font:inherit;color:inherit;background:none;border:0;cursor:pointer",
-      onClick: function () { openPeek(ctx, r); }
+      // Straight to the card. This row already says why the job is here, so
+      // an intermediate summary dialog would be a click that told you nothing.
+      onClick: function () {
+        WFCardPanel.sheet(ctx, r.card, {
+          kicker: "Trello card",
+          footer: function () {
+            return O.el("div.wf-cp-note", {
+              text: WFAging.verdictText(r.forecast.verdict) + " — " + WFAging.explain(r.forecast)
+            });
+          }
+        });
+      }
     },
       O.el("div", null,
         O.el("div.wf-job", { text: r.card.name }),
@@ -170,88 +296,19 @@
     return row;
   }
 
-  /* ------------------------------------------------------------------- peek */
-
-  /**
-   * The card, without leaving the dashboard.
-   *
-   * Custom fields are read live here. That is worth saying plainly: the Trello
-   * connector used from chat can't see custom fields yet, but the Power-Up has
-   * always been able to -- so job value and cost come off the card itself
-   * rather than waiting on anybody's roadmap.
-   */
-  function openPeek(ctx, r) {
-    var f = r.forecast;
-    var card = r.card;
-    var work = O.activeWork(card);
-
-    var facts = O.el("div", { style: "display:grid;gap:9px" });
-    var line = function (k, v, tone) {
-      return O.el("div", { style: "display:flex;gap:10px;align-items:baseline" },
-        O.el("div", {
-          text: k,
-          style: "min-width:132px;font-size:11px;letter-spacing:.07em;" +
-                 "text-transform:uppercase;color:var(--wf-muted);font-weight:700"
-        }),
-        typeof v === "string"
-          ? O.el("div", { text: v, style: "font-size:14px" + (tone ? ";color:" + tone : "") })
-          : v);
-    };
-
-    facts.appendChild(line("Phase", r.stage.phase || r.stage.name));
-    facts.appendChild(line("In this phase",
-      WFAging.stagePhrase(f.inStage) +
-      (f.inStage.known ? "" : " — moved before the last " + WFAging.WINDOW_DAYS + " days")));
-    facts.appendChild(line("Due", card.due
-      ? new Date(card.due).toLocaleDateString(undefined,
-          { weekday: "short", month: "short", day: "numeric" })
-      : "no date on the card"));
-    facts.appendChild(line("Verdict",
-      O.el("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" },
-        O.tag(WFAging.verdictText(f.verdict), WFAging.verdictTone(f.verdict)),
-        O.el("span", { text: WFAging.explain(f), style: "font-size:13px;color:var(--wf-muted)" }))));
-    facts.appendChild(line("Who has it",
-      work && work.claimedBy ? O.displayName(work.claimedBy) : "nobody yet"));
-    if (work) {
-      facts.appendChild(line("Logged here", O.hours(WFPhase.totalMinutes(work) || 0) +
-        " · " + (WFPhase.percentComplete(work) || 0) + "% done"));
-    }
-
-    var fields = O.el("div", { style: "margin-top:4px" },
-      O.el("div.loading", { text: "Reading the card's fields…" }));
-
-    var body = O.el("div", null, facts,
-      O.el("div", { style: "height:1px;background:var(--wf-line);margin:16px 0" }),
-      fields);
-
-    WFRest.getCardFieldsDisplay(ctx.t, ctx.board.id, card.id).then(function (list) {
-      fields.innerHTML = "";
-      if (!list || !list.length) {
-        fields.appendChild(O.el("div.muted", { style: "font-size:13px",
-          text: "No custom fields filled in on this card." }));
-        return;
-      }
-      var grid = O.el("div", { style: "display:grid;gap:8px" });
-      list.forEach(function (x) { grid.appendChild(line(x.name, x.display)); });
-      fields.appendChild(grid);
-    }).catch(function (e) {
-      fields.innerHTML = "";
-      fields.appendChild(O.el("div.muted", { style: "font-size:13px",
-        text: "Couldn't read the custom fields: " + ((e && e.message) || e) }));
+  /** Turn a stat tile into a button onto the jobs behind it. */
+  function drillable(tile, ctx, title, rows) {
+    if (!rows || !rows.length) return tile;
+    tile.setAttribute("role", "button");
+    tile.setAttribute("tabindex", "0");
+    tile.title = "Show these " + rows.length + " jobs";
+    tile.style.cursor = "pointer";
+    var go = function () { openDrill(ctx, title, rows); };
+    tile.addEventListener("click", go);
+    tile.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); }
     });
-
-    O.dialog({
-      title: card.name,
-      note: "Everything the board knows about this job.",
-      content: body,
-      buttons: [{
-        label: "Open in Trello", primary: true,
-        onClick: function () { O.openCard(card); }
-      }, {
-        label: "Show the work board", quiet: true,
-        onClick: function () { ctx.goTo("workboard"); }
-      }]
-    });
+    return tile;
   }
 
   /* --------------------------------------------------------- price hygiene */
@@ -317,11 +374,21 @@
           O.btn("Refresh", { quiet: true, busyText: "Refreshing…", onClick: ctx.reload }));
         head.lastChild.classList.add("wf-spacer");
 
+        var pick = function (verdicts) {
+          return f.worstFirst.filter(function (r) {
+            return verdicts.indexOf(r.forecast.verdict) !== -1;
+          });
+        };
+
         var stats = O.el("div.wf-stats", null,
-          O.stat("In the shop", s.inShop, "jobs being worked right now"),
-          O.stat("Won't make it", f.late + f.atRisk,
+          drillable(O.stat("In the shop", s.inShop, "jobs being worked right now"),
+            ctx, "In the shop", f.worstFirst.filter(function (r) {
+              return !!O.activeWork(r.card);
+            })),
+          drillable(O.stat("Won't make it", f.late + f.atRisk,
             f.late + " already past, " + f.atRisk + " heading that way",
             f.late + f.atRisk > 0),
+            ctx, "Won't make it", pick(["late", "at-risk"])),
           O.stat("Waiting on you", s.pendingApproval, "phases need your sign-off"),
           O.stat("Margin on open work",
             marginPct == null ? "—" : marginPct + "%",
@@ -333,7 +400,7 @@
         var health = O.panel("Will it land?", "against each card's own due date");
         health.style.display = "flex";
         health.style.flexDirection = "column";
-        health.body(meter(f),
+        health.body(meter(ctx, f),
           O.el("div.wf-callout", null,
             O.el("div.wf-callout-k", { text: "On the floor right now" }),
             O.el("div.wf-callout-v", {

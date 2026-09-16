@@ -1,12 +1,22 @@
 /* Floor -- the shop's live surface: what every station is building and what is
-   queued behind it. Read-only in this pass; Start, Stop, the percent slider
-   and Complete land next.
+   queued behind it.
 
    THE ONE RULE THIS SCREEN IS BUILT AROUND: no running timer is ever shown to
    the shop. A welder sees status and percent; a manager sees the clock. The
    minute a timer ticks at somebody, the timings stop being an honest record of
    how long work takes and start being something to manage, and the data we
-   need for capacity planning is gone. Wired to WFTables. */
+   need for capacity planning is gone.
+
+   THE SECOND RULE, FROM THE MOCKUP: a column never sends you somewhere else.
+   The cover, the card, the queue all render in the column, and the X in any
+   view header puts Station back without leaving it. A station screen gets
+   glanced at from across the shop -- bouncing somebody out to Trello to read a
+   drawing means they come back to a reloaded page and have to find their
+   station again.
+
+   Still to come: Start, Stop, the percent slider, Complete, and the assign and
+   QC views behind the first two icon buttons. Those all write, and they land
+   together. Wired to WFTables, WFCardView, WFCardPanel. */
 (function () {
   "use strict";
   var O = WFOps;
@@ -89,7 +99,8 @@
 
       ".wf-fl-q{display:flex;flex-direction:column;gap:7px}",
       ".wf-fl-t{display:flex;gap:11px;align-items:flex-start;background:var(--p-tile);",
-      "border-radius:14px;padding:10px 12px;min-width:0}",
+      "border-radius:14px;padding:10px 12px;min-width:0;border:1.5px solid transparent}",
+      ".wf-fl-t:hover{border-color:var(--p-track)}",
       ".wf-fl-t.is-late{box-shadow:inset 3px 0 0 var(--p-warn)}",
       ".wf-fl-t-p{font-family:'Barlow Condensed',inherit;font-size:17px;font-weight:700;",
       "color:var(--p-idle);min-width:17px;line-height:1.35}",
@@ -100,8 +111,34 @@
       ".wf-fl-t-d.is-late{color:var(--p-warn);font-weight:700}",
       ".wf-fl-more{font-size:11.5px;color:var(--p-muted);padding-left:2px}",
 
+      /* Job number on the left, the three round buttons on the right. The
+         buttons stay put while the job name wraps under them. */
+      ".wf-fl-titlerow{display:flex;align-items:flex-start;gap:10px}",
+      ".wf-fl-icons{display:flex;gap:6px;flex:0 0 auto;padding-top:4px}",
+      ".wf-fl-ic{width:30px;height:30px;border-radius:999px;border:1.5px solid var(--p-track);",
+      "background:#fff;color:var(--p-ink);font-size:14px;line-height:1;cursor:pointer;",
+      "display:flex;align-items:center;justify-content:center;font-family:inherit;padding:0}",
+      ".wf-fl-ic:hover{border-color:var(--p-bg);background:var(--p-tile)}",
+      ".wf-fl-ic.is-off{opacity:.35;cursor:not-allowed}",
+
+      /* Never cropped: on a shop screen a cover is a drawing, and a cropped
+         drawing is a wrong drawing. */
+      ".wf-fl-cover{width:100%;aspect-ratio:16/10;background:var(--p-tile);",
+      "border-radius:12px;overflow:hidden;display:flex;align-items:center;justify-content:center}",
+      ".wf-fl-cover img{width:100%;height:100%;object-fit:contain;display:block}",
+
+      /* When a column is showing a card it gives the whole column over to it. */
+      ".wf-fl-col.is-card{padding:0;overflow:hidden}",
+      ".wf-fl-col.is-card .wf-cp{height:100%}",
+
+      ".wf-fl-gear{width:34px;height:34px;border-radius:999px;border:1.5px solid rgba(255,255,255,.28);",
+      "background:transparent;color:#fff;font-size:17px;line-height:1;cursor:pointer;",
+      "display:flex;align-items:center;justify-content:center;font-family:inherit;padding:0;flex:0 0 auto}",
+      ".wf-fl-gear:hover{background:rgba(255,255,255,.14);border-color:#fff}",
+
       "@media (max-width:600px){.wf-fl-top{padding:12px 14px}.wf-fl-area{font-size:20px}",
-      ".wf-fl-clock b{font-size:21px}}"
+      ".wf-fl-clock b{font-size:21px}",
+      ".wf-fl-icons{gap:4px}.wf-fl-ic{width:27px;height:27px}}"
     ].join("");
     var tag = document.createElement("style");
     tag.id = "wf-floor-styles";
@@ -224,8 +261,14 @@
       small: true, busyText: "…",
       onClick: function () { return state.ctx.reload().then(refresh); }
     }));
+    // The gear. It used to be a small button labelled "Stations" wedged beside
+    // Refresh, which is why nobody found it -- station setup is the first thing
+    // a manager needs on this screen and it looked like a filter.
     if (state.ctx.isManager) {
-      bar.appendChild(O.btn("Stations", { small: true, onClick: openStations }));
+      bar.appendChild(O.el("button.wf-fl-gear", {
+        type: "button", title: "Station setup", "aria-label": "Station setup",
+        text: "⚙", onClick: openStations
+      }));
     }
     return bar;
   }
@@ -270,7 +313,11 @@
 
   function column(st, scale) {
     var color = WFTables.statusColor(st.status);
-    var col = O.el("div.wf-fl-col", { style: "--s:" + color });
+    // data-station is how the card view finds its own column again; without it
+    // opening a card would have to repaint the whole floor.
+    var col = O.el("div.wf-fl-col", {
+      style: "--s:" + color, "data-station": st.station.id
+    });
 
     var head = O.el("div.wf-fl-h", null,
       O.el("div.wf-fl-name", { text: st.station.table || "Station" }),
@@ -295,20 +342,93 @@
     return col;
   }
 
+  /**
+   * The round icon buttons beside the job number.
+   *
+   * The mockup puts three here -- assign, QC, card. Card is the one that works
+   * today; the other two are the write path and land with Start/Stop, so they
+   * are drawn disabled with a tooltip saying so rather than left out. A button
+   * that isn't there yet teaches the shop the screen can't do it; a button that
+   * says "coming with the buttons" teaches them where it will be.
+   */
+  function iconRow(st) {
+    var row = O.el("div.wf-fl-icons");
+    var mk = function (glyph, title, on) {
+      return O.el("button.wf-fl-ic" + (on ? "" : ".is-off"), {
+        type: "button", title: title, "aria-label": title,
+        disabled: !on, text: glyph, onClick: on || null
+      });
+    };
+    row.appendChild(mk("⇲", "Assign a job to this station", null));
+    row.appendChild(mk("✓", "QC checklist", null));
+    row.appendChild(mk("↗", "Open this card here", function () {
+      openCardInColumn(st);
+    }));
+    return row;
+  }
+
+  /**
+   * Swap the column over to the card, and back again.
+   *
+   * The mockup's rule, kept exactly: the X in a view header returns you to
+   * Station without leaving the column. A station screen is glanced at from
+   * across the shop -- taking somebody out to Trello to read a drawing means
+   * they come back to a reloaded page and have to find their station again.
+   */
+  function openCardInColumn(st) {
+    var col = state.host.querySelector('[data-station="' + st.station.id + '"]');
+    if (!col) return;
+    var keep = Array.prototype.slice.call(col.childNodes);
+    col.textContent = "";
+    col.classList.add("is-card");
+    col.appendChild(WFCardPanel.inline(state.ctx, st.job, {
+      kicker: "Trello card",
+      backLabel: "×",
+      onBack: function () {
+        col.textContent = "";
+        col.classList.remove("is-card");
+        keep.forEach(function (n) { col.appendChild(n); });
+      }
+    }));
+  }
+
   function nowBuilding(st, scale) {
     var box = O.el("div", { style: "display:flex;flex-direction:column;gap:9px" });
     var num = jobNumber(st.job);
 
     box.appendChild(O.el("div.wf-fl-k", { text: "Now building" }));
-    box.appendChild(O.el("div.wf-fl-num", {
+
+    var titleRow = O.el("div.wf-fl-titlerow");
+    var titles = O.el("div", { style: "min-width:0;flex:1 1 auto" });
+    titles.appendChild(O.el("div.wf-fl-num", {
       style: "font-size:" + (num ? scale.job : Math.round(scale.job * 0.55)) + "px",
       text: num || jobTitle(st.job)
     }));
     if (num) {
-      box.appendChild(O.el("div.wf-fl-job", {
+      titles.appendChild(O.el("div.wf-fl-job", {
         style: "font-size:" + scale.name + "px", text: jobTitle(st.job)
       }));
     }
+    titleRow.appendChild(titles);
+    titleRow.appendChild(iconRow(st));
+    box.appendChild(titleRow);
+
+    // The cover, 16:10 and never cropped -- on a station screen the picture is
+    // often the fastest way to know you have the right job in front of you.
+    // It loads on its own; the column never waits for it.
+    // A station that can't reach the card still has to draw the station. The
+    // whole fetch is inside a promise chain so a missing endpoint fails as a
+    // dropped picture rather than a blank column.
+    var shot = O.el("div.wf-fl-cover");
+    box.appendChild(shot);
+    Promise.resolve()
+      .then(function () { return WFRest.getCardDetail(state.ctx.t, st.job.id); })
+      .then(function (full) {
+        var url = WFCardView.coverFrom(full);
+        if (!url) throw new Error("no cover");
+        shot.appendChild(O.el("img", { src: url, alt: "", loading: "lazy" }));
+      })
+      .catch(function () { if (shot.parentNode) shot.parentNode.removeChild(shot); });
 
     var who = WFTables.activeWork(st.job);
     var person = (who && who.claimedBy) ? O.displayName(who.claimedBy) : st.station.welder;
@@ -369,12 +489,22 @@
     var list = O.el("div.wf-fl-q");
     st.queue.slice(0, show).forEach(function (c, i) {
       var late = WFTables.isLate(c);
-      list.appendChild(O.el("div.wf-fl-t" + (late ? ".is-late" : ""), null,
+      // A queued job opens its card in this column too. Tapping one to START
+      // it is the write path and arrives with Start/Stop -- until then, tapping
+      // means "let me look at it", which is what somebody wants when they're
+      // deciding what to pull next anyway.
+      var tile = O.el("button.wf-fl-t" + (late ? ".is-late" : ""), {
+        type: "button",
+        title: "Open this card",
+        style: "width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer",
+        onClick: function () { openCardInColumn({ station: st.station, job: c }); }
+      },
         O.el("div.wf-fl-t-p", { text: String(i + 1) }),
         O.el("div.wf-fl-t-m", null,
           O.el("div.wf-fl-t-n", { text: c.name }),
           O.el("div.wf-fl-t-d" + (late ? ".is-late" : ""),
-            { text: dueText(c) || "no date set" }))));
+            { text: dueText(c) || "no date set" })));
+      list.appendChild(tile);
     });
     box.appendChild(list);
     if (st.queue.length > show) {

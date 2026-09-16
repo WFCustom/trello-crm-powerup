@@ -42,6 +42,7 @@ const LOAD_ORDER = [
   "lib/tables.js",
   "lib/aging.js",
   "lib/records.js",
+  "lib/cardview.js",
   "popups/ops.js"
 ];
 

@@ -82,13 +82,25 @@ function boot({ role = "worker", cards = [], saved = null } = {}) {
   win.eval(read("config.js"));
   win.eval(read("lib/board-extras.js"));
   win.eval(read("lib/stage.js"));
-  win.WFRest = { request: () => Promise.resolve([]), write: () => Promise.resolve({}) };
+  // getCardDetail is what the cover image rides on. Returning a card with an
+  // image attachment exercises the real WFCardView.coverFrom path rather than
+  // only the "no cover" branch.
+  win.WFRest = {
+    request: () => Promise.resolve([]),
+    write: () => Promise.resolve({}),
+    getCardDetail: (t, id) => Promise.resolve({
+      id, name: "job " + id,
+      attachments: [{ url: "https://x/drawing.png", mimeType: "image/png" }]
+    })
+  };
   win.WFRoster = { getRoster: () => Promise.resolve({ managers: [], phaseSpecialists: {} }) };
   win.WFPricing = { getBoardAudit: () => Promise.resolve([]) };
   win.Chart = function () {};
 
   win.eval(read("lib/tables.js"));
+  win.eval(read("lib/cardview.js"));
   win.eval(read("popups/ops.js"));
+  win.eval(read("popups/cardpanel.js"));
 
   let def = null;
   const realTab = win.WFOps.tab;
@@ -342,14 +354,16 @@ test("a manager gets the clock, the summary strip and station setup", async () =
   assert.equal(chips[0].getAttribute("data-card"), "B");
 
   assert.equal($(node, ".wf-fl-sum").length, 1, "summary strip");
-  assert.ok($(node, "button").some((b) => textOf(b) === "Stations"));
+  // Station setup is a gear now, not a text button wedged beside Refresh --
+  // it was the first thing a manager needs and it looked like a filter.
+  assert.equal($(node, ".wf-fl-gear").length, 1, "station setup gear");
 });
 
 test("a worker gets no summary strip and no station setup", async () => {
   const env = boot({ role: "worker", saved: ONE_STATION, cards: [] });
   const node = await render(env, 1280);
   assert.equal($(node, ".wf-fl-sum").length, 0);
-  assert.ok(!$(node, "button").some((b) => textOf(b) === "Stations"));
+  assert.equal($(node, ".wf-fl-gear").length, 0, "no station setup for the shop");
 });
 
 test("the grid lays out to the screen it's on", async () => {
@@ -431,7 +445,7 @@ test("switching areas keeps you there, and the finishing bay reads its own stati
 test("saving stations writes config and nothing else", async () => {
   const env = boot({ role: "manager", saved: ONE_STATION, cards: [] });
   const node = await render(env, 1280);
-  $(node, "button").find((b) => textOf(b) === "Stations")
+  $(node, ".wf-fl-gear")[0]
     .dispatchEvent(new env.win.Event("click"));
 
   const doc = env.win.document;
@@ -445,4 +459,124 @@ test("saving stations writes config and nothing else", async () => {
   assert.equal(env.written.length, 1, "one write");
   assert.equal(env.written[0][0], "wfStations", "and it's configuration");
   assert.ok(Array.isArray(env.written[0][1].stations));
+});
+
+/* ================================================= the card, inside the column */
+
+test("a running job shows the three icon buttons, with the card one live", async () => {
+  const env = boot({
+    role: "worker",
+    saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true, pct: 40 })]
+  });
+  const node = await render(env, 1280);
+
+  const icons = $(node, ".wf-fl-ic");
+  assert.equal(icons.length, 3, "assign, QC, card");
+  // Assign and QC write, and land with Start/Stop. They are drawn disabled
+  // rather than left out so the shop learns where they will be.
+  assert.equal(icons[0].disabled, true);
+  assert.equal(icons[1].disabled, true);
+  assert.equal(icons[2].disabled, false, "the card button works today");
+  assert.match(icons[2].getAttribute("title"), /card/i);
+});
+
+test("an idle station draws no icon row", async () => {
+  const env = boot({ role: "worker", saved: ONE_STATION, cards: [] });
+  const node = await render(env, 1280);
+  assert.equal($(node, ".wf-fl-ic").length, 0);
+});
+
+test("each column can be found again by station id", async () => {
+  const env = boot({
+    role: "worker",
+    saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  const node = await render(env, 1280);
+  // Without this hook, opening a card would have to repaint the whole floor.
+  assert.equal($(node, '[data-station="s1"]').length, 1);
+});
+
+test("the cover is the card's image, never cropped", async () => {
+  const env = boot({
+    role: "worker",
+    saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  const node = await render(env, 1280);
+  await new Promise((r) => setTimeout(r, 0));
+
+  const img = $(node, ".wf-fl-cover img");
+  assert.equal(img.length, 1);
+  assert.equal(img[0].getAttribute("src"), "https://x/drawing.png");
+  // The station itself is drawn whether or not the picture ever arrives -- the
+  // two tests below are the ones that hold that line.
+  assert.match(textOf(node), /Station #1/);
+});
+
+test("a card with no picture drops the frame rather than leaving a grey box", async () => {
+  const env = boot({
+    role: "worker",
+    saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  env.win.WFRest.getCardDetail = () => Promise.resolve({ id: "B", attachments: [] });
+  const node = await render(env, 1280);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal($(node, ".wf-fl-cover").length, 0);
+});
+
+test("a station still draws when the card can't be read at all", async () => {
+  const env = boot({
+    role: "worker",
+    saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true, pct: 40 })]
+  });
+  // The shape a stripped-down or broken WFRest takes: the method isn't there.
+  delete env.win.WFRest.getCardDetail;
+  const node = await render(env, 1280);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.match(textOf(node), /Station #1/);
+  assert.match(textOf(node), /40% complete/);
+  assert.equal($(node, ".wf-fl-cover").length, 0);
+});
+
+test("the card view takes over the column and the X gives it back", async () => {
+  const env = boot({
+    role: "worker",
+    saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true, pct: 40 })]
+  });
+  const node = await render(env, 1280);
+  const col = $(node, '[data-station="s1"]')[0];
+
+  $(node, ".wf-fl-ic")[2].dispatchEvent(new env.win.Event("click"));
+  assert.ok(col.classList.contains("is-card"));
+  assert.equal($(col, ".wf-cp").length, 1, "the card panel is in the column");
+  assert.ok(!/40% complete/.test(textOf(col)), "the station view is put away");
+
+  // The mockup's rule: the X returns to Station without leaving the column.
+  $(col, ".wf-cp-x")[0].dispatchEvent(new env.win.Event("click"));
+  assert.ok(!col.classList.contains("is-card"));
+  assert.match(textOf(col), /40% complete/);
+  assert.match(textOf(col), /Station #1/);
+});
+
+test("a queued job opens its own card in the same column", async () => {
+  const env = boot({
+    role: "worker",
+    saved: ONE_STATION,
+    cards: [
+      job("B", "LA", { claimed: KEV, running: true }),
+      job("Q", "LA", { pos: 10, name: "#2444 Provo Canyon — handrail run" })
+    ]
+  });
+  const node = await render(env, 1280);
+  const tiles = $(node, "button.wf-fl-t");
+  assert.equal(tiles.length, 1, "the queue tile is a button now");
+
+  tiles[0].dispatchEvent(new env.win.Event("click"));
+  const col = $(node, '[data-station="s1"]')[0];
+  assert.ok(col.classList.contains("is-card"));
 });

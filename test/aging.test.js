@@ -90,7 +90,17 @@ function boot({ cards = [], actions = [], fields = [], audit = [] } = {}) {
       return Promise.resolve([]);
     },
     write: () => Promise.resolve({}),
-    getCardFieldsDisplay: () => Promise.resolve(fields)
+    getCardFieldsDisplay: () => Promise.resolve(fields),
+    getCardDetail: (t, id) => Promise.resolve({
+      id, idBoard: BOARD_ID, name: "Late job", desc: "", due: iso(-3),
+      shortUrl: "https://trello.com/c/" + id,
+      board: { name: "Office Operations" }, list: { name: "Assemble CNC" },
+      labels: [], members: [], attachments: [], checklists: [], actions: []
+    }),
+    postComment: () => Promise.resolve({}),
+    updateCard: () => Promise.resolve({}),
+    setCheckItem: () => Promise.resolve({}),
+    invalidateCard: () => {}
   };
   win.WFPricing = {
     RULE_TEXT: "a number or a range",
@@ -102,7 +112,9 @@ function boot({ cards = [], actions = [], fields = [], audit = [] } = {}) {
 
   win.eval(read("lib/phase.js"));
   win.eval(read("lib/aging.js"));
+  win.eval(read("lib/cardview.js"));
   win.eval(read("popups/ops.js"));
+  win.eval(read("popups/cardpanel.js"));
 
   let def = null;
   const realTab = win.WFOps.tab;
@@ -348,7 +360,7 @@ test("nothing heading for a miss says so plainly", async () => {
   assert.match(textOf(await render(env)), /Nothing is heading for a missed date/);
 });
 
-test("a row is a button and opens the peek, which reads custom fields live", async () => {
+test("a row is a button and opens the card itself, not a summary of it", async () => {
   const env = boot({
     cards: [card("late", "ASM", { due: iso(-3), name: "Late job",
                                   economics: { value: 12000, cost: 8000 } })],
@@ -361,18 +373,25 @@ test("a row is a button and opens the peek, which reads custom fields live", asy
   assert.ok(row, "the whole row is clickable");
   row.dispatchEvent(new env.win.Event("click"));
   await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
 
   const doc = env.win.document;
-  const dlg = textOf(doc.body);
-  assert.match(dlg, /Late job/);
-  assert.match(dlg, /6 days in Assemble CNC|6 days/);
-  assert.match(dlg, /past its date/);
-  assert.match(dlg, /Job Value \(QB\)/, "custom fields are read on the card");
-  assert.match(dlg, /12000/);
-  assert.ok($(doc, "button").some((b) => /Open in Trello/.test(textOf(b))));
+  const sheet = doc.querySelector(".wf-cp-sheet");
+  assert.ok(sheet, "the card panel opened over the dashboard");
+  const t = textOf(sheet);
+  assert.match(t, /Late job/);
+  // The verdict travels with the card, so the reason the row was on the list
+  // is still on screen once the card is open.
+  assert.match(t, /past its date/);
+  // Custom fields are read live off the card -- the chat-side connector can't
+  // see them, the Power-Up always could.
+  assert.match(t, /Job Value \(QB\)/);
+  assert.match(t, /12000/);
+  assert.ok($(sheet, "a").some((a) => /Trello/.test(textOf(a))),
+    "Trello is still one click away, just no longer the only way out");
 });
 
-test("the peek copes with a card that has no custom fields filled in", async () => {
+test("the card panel copes with a card that has no custom fields filled in", async () => {
   const env = boot({
     cards: [card("late", "ASM", { due: iso(-3) })],
     actions: [], fields: []
@@ -380,7 +399,8 @@ test("the peek copes with a card that has no custom fields filled in", async () 
   const node = await render(env);
   $(node, "button.wf-row")[0].dispatchEvent(new env.win.Event("click"));
   await new Promise((r) => setTimeout(r, 0));
-  assert.match(textOf(env.win.document.body), /No custom fields filled in/);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.match(textOf(env.win.document.body), /No card fields filled in/);
 });
 
 test("the caveats are stated rather than papered over", async () => {
