@@ -6,41 +6,64 @@
    .row, .loading, .chip, .chip-row, .add-row, .hint, .error, .saved,
    .phase-block, .chart-row, .chart-box) so the old views restyle for free.
    Everything prefixed .wf- is the new ops-window vocabulary.
+
+   The palette below is "Navy · daylight" from the approved mock -- the same
+   values the Floor tab injects as --p-*. The --wf-* names stay because tabs
+   reference them; only what they point at moved.
    =========================================================================== */
 
+/* Only popups/ops.html links the font. Every other popup loads this sheet and
+   nothing else, so the import lives here or half the screens fall back to
+   Segoe. Condensed carries the headings, Barlow the body. */
+@import url("https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=Barlow+Condensed:wght@500;600;700&display=swap");
+
 :root {
-  /* --- palette --- */
-  --wf-navy:      #14293d;
-  --wf-steel:     #1f4e79;
-  --wf-steel-2:   #4d7ba6;
-  --wf-steel-3:   #7ea3c4;
-  --wf-ember:     #c8471c;
-  --wf-amber:     #d98324;
-  --wf-go:        #1f6f4a;
+  /* --- palette: Navy · daylight --- */
+  --wf-navy:      #0f2340;
+  --wf-steel:     #1c4a85;
+  --wf-steel-2:   #4f7fb8;
+  --wf-steel-3:   #8aa9cc;
+  --wf-ember:     #d9482e;
+  --wf-amber:     #e8a317;
+  --wf-go:        #1f9d63;
 
-  --wf-ground:    #f2f5f8;
-  --wf-band:      #e6ecf2;
-  --wf-line:      #cbd5df;
-  --wf-text:      #14293d;
-  --wf-muted:     #5d6b7a;
-  --wf-faint:     #8b97a3;
+  --wf-ground:    #f3f5f8;
+  --wf-band:      #e4e9f0;
+  --wf-line:      #cfd7e2;
+  --wf-text:      #12213a;
+  --wf-muted:     #5b6b80;
+  --wf-faint:     #8896a8;
 
-  --wf-tint-go:      #e4f0e9;  --wf-ink-go:    #155c3c;
-  --wf-tint-amber:   #fbeee4;  --wf-ink-amber: #a35c14;
-  --wf-tint-ember:   #f0d3c8;  --wf-ink-ember: #8f2f0f;
-  --wf-tint-steel:   #e6ecf2;
+  --wf-tint-go:      #dff2e7;  --wf-ink-go:    #14663f;
+  --wf-tint-amber:   #fdf0d5;  --wf-ink-amber: #6b4a06;
+  --wf-tint-ember:   #fae0da;  --wf-ink-ember: #a5331d;
+  --wf-tint-steel:   #e4e9f0;
 
-  --wf-r-card:  20px;
-  --wf-r-tile:  18px;
+  /* Two families, and nothing else: condensed for anything that shouts
+     (headings, numbers, station names), Barlow for anything you read. */
+  --wf-font:       "Barlow", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --wf-font-cond:  "Barlow Condensed", "Oswald", "Segoe UI", sans-serif;
+
+  --wf-r-card:  22px;
+  --wf-r-tile:  16px;
   --wf-r-pill:  999px;
-  --wf-shadow:  0 1px 3px rgba(20, 41, 61, .09);
-  --wf-shadow-lift: 0 6px 18px rgba(20, 41, 61, .14);
+  /* Kept as tokens because tabs use them for hover lift and for the dialog,
+     but nothing in this sheet puts a shadow on a panel any more -- see below. */
+  --wf-shadow:  0 1px 3px rgba(15, 35, 64, .08);
+  --wf-shadow-lift: 0 10px 28px rgba(15, 35, 64, .18);
 
   /* legacy aliases -- old markup referenced these */
   --wf-green: var(--wf-go);
   --wf-red:   var(--wf-ember);
   --wf-gray:  var(--wf-muted);
   --wf-bg:    var(--wf-ground);
+
+  /* cardpanel.js asks for these by name with the mock's values as fallbacks;
+     defining them here means the panel tracks the sheet instead of drifting. */
+  --wf-ink:    var(--wf-text);
+  --wf-accent: var(--wf-amber);
+  --wf-good:   var(--wf-go);
+  --wf-bad:    var(--wf-ember);
 }
 
 * { box-sizing: border-box; }
@@ -48,9 +71,9 @@
 body {
   margin: 0;
   padding: 16px;
-  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  font-size: 14px;
-  line-height: 1.45;
+  font-family: var(--wf-font);
+  font-size: 15px;
+  line-height: 1.5;
   color: var(--wf-text);
   background: #fff;
   -webkit-font-smoothing: antialiased;
@@ -58,10 +81,29 @@ body {
 
 /* --------------------------------------------------------------- typography */
 
-h1, h2, h3 { margin: 0 0 8px; color: var(--wf-text); letter-spacing: -.01em; }
-h1 { font-size: 23px; font-weight: 700; }
-h2 { font-size: 17px; font-weight: 700; }
-h3 { font-size: 15px; font-weight: 700; text-transform: none; letter-spacing: 0; }
+/* Headings are condensed, uppercase and tracked: the mock's one loud voice.
+   It also buys back width, which is the scarce thing in a Trello iframe. */
+h1, h2, h3 {
+  margin: 0 0 8px;
+  font-family: var(--wf-font-cond);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  line-height: 1.1;
+  color: var(--wf-navy);
+}
+h1 { font-size: 30px; }
+h2 { font-size: 23px; }
+h3 { font-size: 18px; }
+
+/* The card panel puts the job name in an h2. A name is not a section title --
+   shouting a customer's job in caps is wrong, so it opts out. */
+h2.wf-cp-title, .wf-cp-title {
+  font-family: var(--wf-font);
+  text-transform: none;
+  letter-spacing: 0;
+  line-height: 1.25;
+}
 
 a { color: var(--wf-steel); }
 a:hover { color: var(--wf-navy); }
@@ -74,29 +116,39 @@ code {
   background: var(--wf-band);
 }
 
-.muted { color: var(--wf-faint); font-size: 12.5px; }
-.hint  { color: var(--wf-muted); font-size: 12.5px; }
+.muted { color: var(--wf-faint); font-size: 13px; }
+.hint  { color: var(--wf-muted); font-size: 13px; }
 .loading { color: var(--wf-muted); font-style: normal; padding: 18px 2px; }
-.section { margin-bottom: 22px; }
+.section { margin-bottom: 24px; }
 .row { display: flex; gap: 12px; }
 .row > div { flex: 1; }
 
-.error { margin-top: 8px; color: var(--wf-ink-ember); font-size: 13px; font-weight: 600; }
-.saved { margin-top: 8px; color: var(--wf-ink-go);    font-size: 13px; font-weight: 600; }
+.error { margin-top: 8px; color: var(--wf-ink-ember); font-size: 13.5px; font-weight: 700; }
+.saved { margin-top: 8px; color: var(--wf-ink-go);    font-size: 13.5px; font-weight: 700; }
 
 /* ------------------------------------------------------------------- inputs */
 
-label { display: block; margin: 12px 0 5px; font-size: 13px; font-weight: 600; color: var(--wf-muted); }
+/* Field labels read as the mock's key text -- small, tracked, uppercase --
+   so a form column and a stat tile stack in the same rhythm. */
+label {
+  display: block;
+  margin: 14px 0 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--wf-muted);
+}
 
 input, select, textarea {
   width: 100%;
-  padding: 8px 12px;
+  padding: 9px 13px;
   font: inherit;
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--wf-text);
   background: #fff;
-  border: 1px solid var(--wf-line);
-  border-radius: 10px;
+  border: 1.5px solid var(--wf-line);
+  border-radius: 11px;
 }
 input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 2px solid var(--wf-steel);
@@ -104,31 +156,34 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   border-color: var(--wf-steel);
 }
 textarea { min-height: 68px; resize: vertical; }
-input[type="range"] { padding: 0; border: 0; accent-color: var(--wf-steel); }
+input[type="range"] { padding: 0; border: 0; accent-color: var(--wf-go); }
 
 /* ------------------------------------------------------------------ buttons */
 
+/* Everything is a pill, and the quiet state is a white pill with a track-
+   coloured edge -- the mock never uses a grey fill to mean "secondary". */
 button.primary, button.secondary, .wf-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  padding: 9px 16px;
+  padding: 10px 18px;
   font: inherit;
-  font-size: 13.5px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 700;
   border-radius: var(--wf-r-pill);
-  border: 1px solid transparent;
+  border: 1.5px solid transparent;
   cursor: pointer;
   transition: background .12s, border-color .12s, color .12s;
   white-space: nowrap;
 }
+/* Navy, not steel: the mock's emphasis is the darkest thing on the screen. */
 button.primary, .wf-btn-primary {
   margin-top: 0;
   color: #fff;
-  background: var(--wf-steel);
+  background: var(--wf-navy);
 }
-button.primary:hover, .wf-btn-primary:hover { background: #1a4266; }
+button.primary:hover, .wf-btn-primary:hover { background: var(--wf-steel); }
 button.primary:active, .wf-btn-primary:active { background: var(--wf-navy); }
 
 button.secondary, .wf-btn {
@@ -136,20 +191,22 @@ button.secondary, .wf-btn {
   background: #fff;
   border-color: var(--wf-line);
 }
-button.secondary:hover, .wf-btn:hover { background: var(--wf-band); }
+/* Darkening the edge rather than filling the pill keeps hover from reading as
+   a state change on a screen full of status colour. */
+button.secondary:hover, .wf-btn:hover { background: #fff; border-color: var(--wf-navy); }
 
 .wf-btn-danger { color: #fff; background: var(--wf-ember); border-color: transparent; }
-.wf-btn-danger:hover { background: #ad3b14; }
+.wf-btn-danger:hover { background: #bf3a22; border-color: transparent; }
 
 .wf-btn-quiet {
   background: transparent;
   border-color: transparent;
   color: var(--wf-muted);
-  padding: 7px 10px;
+  padding: 8px 12px;
 }
-.wf-btn-quiet:hover { background: var(--wf-band); color: var(--wf-text); }
+.wf-btn-quiet:hover { background: var(--wf-band); border-color: transparent; color: var(--wf-text); }
 
-.wf-btn-sm { padding: 6px 12px; font-size: 12.5px; }
+.wf-btn-sm { padding: 7px 14px; font-size: 13px; }
 
 button:disabled, .wf-btn:disabled { opacity: .45; cursor: default; }
 button:focus-visible, .wf-btn:focus-visible, .wf-tab:focus-visible {
@@ -159,23 +216,27 @@ button:focus-visible, .wf-btn:focus-visible, .wf-tab:focus-visible {
 
 /* ------------------------------------------------------------------- tables */
 
-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-th, td { text-align: left; padding: 11px 10px; font-size: 13.5px; border-bottom: 1px solid var(--wf-band); }
+table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+th, td { text-align: left; padding: 12px 10px; font-size: 14px; border-bottom: 1px solid var(--wf-band); }
 th {
-  font-size: 12.5px; font-weight: 600; color: var(--wf-muted);
-  border-bottom: 1px solid var(--wf-line);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--wf-muted);
+  border-bottom: 1.5px solid var(--wf-line);
 }
-tbody tr:hover { background: rgba(20, 41, 61, .035); }
+tbody tr:hover { background: var(--wf-ground); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* -------------------------------------------------------------------- pills */
 
 .pill, .wf-tag {
   display: inline-block;
-  padding: 4px 12px;
+  padding: 4px 13px;
   border-radius: var(--wf-r-pill);
   font-size: 12.5px;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.35;
   white-space: nowrap;
 }
@@ -183,7 +244,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .pill.amber, .wf-tag-warn  { background: var(--wf-tint-amber); color: var(--wf-ink-amber); }
 .pill.red,   .wf-tag-late  { background: var(--wf-ember);      color: #fff; }
 .pill.gray,  .wf-tag-quiet { background: var(--wf-band);       color: var(--wf-muted); }
-.wf-tag-solid { background: var(--wf-steel); color: #fff; }
+.wf-tag-solid { background: var(--wf-navy); color: #fff; }
 
 /* --------------------------------------------------------------------- chips */
 
@@ -192,10 +253,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px 6px 14px;
+  padding: 6px 8px 6px 15px;
   border-radius: var(--wf-r-pill);
   background: var(--wf-band);
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--wf-text);
 }
@@ -218,8 +279,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   padding: 18px 20px;
   margin-bottom: 12px;
   background: #fff;
+  border: 1px solid var(--wf-line);
   border-radius: var(--wf-r-tile);
-  box-shadow: var(--wf-shadow);
 }
 .phase-block h3 { margin-bottom: 4px; }
 
@@ -235,26 +296,29 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 
 /* --- top bar --- */
+/* Full-bleed on purpose: this is window chrome, not a panel, and a rounded bar
+   floating at the top of an iframe reads as a stray card. */
 .wf-top {
   display: flex;
   align-items: center;
   gap: 18px;
   padding: 15px 24px;
   background: var(--wf-navy);
-  color: #eef3f8;
+  color: #fff;
 }
 .wf-brand { display: flex; align-items: center; gap: 12px; }
-.wf-brand img { width: 28px; height: 28px; border-radius: 8px; }
+.wf-brand img { width: 30px; height: 30px; border-radius: 9px; }
 .wf-wordmark {
-  font-family: "Barlow Condensed", "Oswald", "Segoe UI", sans-serif;
-  font-weight: 600;
-  font-size: 19px;
+  font-family: var(--wf-font-cond);
+  font-weight: 700;
+  font-size: 22px;
   letter-spacing: .12em;
+  text-transform: uppercase;
 }
 .wf-boardpill {
-  padding: 6px 14px;
+  padding: 6px 15px;
   border-radius: var(--wf-r-pill);
-  background: rgba(255, 255, 255, .12);
+  background: rgba(255, 255, 255, .14);
   font-size: 13px;
   font-weight: 600;
 }
@@ -263,16 +327,16 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   display: flex;
   align-items: center;
   gap: 16px;
-  font-size: 12.5px;
-  color: #a9b8c7;
+  font-size: 12px;
+  color: rgba(255, 255, 255, .72);
 }
-.wf-who { display: flex; align-items: center; gap: 9px; color: #eef3f8; }
+.wf-who { display: flex; align-items: center; gap: 9px; color: #fff; }
 .wf-avatar {
   display: grid; place-items: center;
-  width: 28px; height: 28px;
+  width: 30px; height: 30px;
   border-radius: var(--wf-r-pill);
   background: var(--wf-steel);
-  font-size: 11px; font-weight: 700; color: #fff;
+  font-size: 11px; font-weight: 800; color: #fff;
 }
 
 /* --- tab bar --- */
@@ -286,17 +350,17 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 9px 16px;
+  padding: 9px 17px;
   font: inherit;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 13.5px;
+  font-weight: 700;
   color: var(--wf-muted);
   background: transparent;
   border: 0;
   border-radius: var(--wf-r-pill);
   cursor: pointer;
 }
-.wf-tab:hover { background: rgba(255, 255, 255, .7); color: var(--wf-text); }
+.wf-tab:hover { background: rgba(255, 255, 255, .75); color: var(--wf-text); }
 .wf-tab.is-active { background: var(--wf-navy); color: #fff; }
 .wf-tab.is-active:hover { background: var(--wf-navy); color: #fff; }
 .wf-badge {
@@ -305,80 +369,117 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   background: var(--wf-ember);
   color: #fff;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 800;
 }
 
 /* --- page body --- */
 .wf-body { flex: 1; padding: 30px 32px 40px; }
 .wf-pagehead { display: flex; align-items: baseline; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
-.wf-h1 { font-size: 23px; font-weight: 700; color: var(--wf-navy); letter-spacing: -.01em; }
-.wf-sub { font-size: 13.5px; color: var(--wf-muted); }
+.wf-h1 {
+  font-family: var(--wf-font-cond);
+  font-size: 32px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  line-height: 1;
+  color: var(--wf-navy);
+}
+.wf-sub { font-size: 14px; color: var(--wf-muted); }
 .wf-pagehead .wf-spacer { margin-left: auto; }
 
 /* --- stat tiles --- */
-.wf-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 26px; }
+.wf-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 26px; }
+/* No shadows on panels -- the mock earns separation with contrast and radius,
+   and stacked shadows at four columns turn into mud. */
 .wf-stat {
-  padding: 22px 24px;
+  padding: 16px 20px 18px;
   background: #fff;
-  border: 1.5px solid transparent;
+  border: 1.5px solid var(--wf-line);
   border-radius: var(--wf-r-tile);
-  box-shadow: var(--wf-shadow);
 }
-.wf-stat-k { font-size: 13px; font-weight: 600; color: var(--wf-muted); }
+.wf-stat-k {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--wf-muted);
+}
 .wf-stat-v {
-  font-size: 42px; font-weight: 700; line-height: 1.15;
+  font-family: var(--wf-font-cond);
+  font-size: 46px; font-weight: 700; line-height: .95;
+  margin: 4px 0 2px;
   color: var(--wf-navy); font-variant-numeric: tabular-nums;
 }
 .wf-stat-n { font-size: 12.5px; color: var(--wf-faint); }
-.wf-stat.is-alert { border-color: var(--wf-tint-ember); }
+.wf-stat.is-alert { border-color: var(--wf-ember); }
 .wf-stat.is-alert .wf-stat-k, .wf-stat.is-alert .wf-stat-v { color: var(--wf-ember); }
 
 /* --- panels --- */
-.wf-panels { display: grid; gap: 20px; margin-bottom: 20px; }
+.wf-panels { display: grid; gap: 16px; margin-bottom: 16px; }
 .wf-panels.split { grid-template-columns: 1.5fr 1fr; }
 .wf-panels.halves { grid-template-columns: 1fr 1fr; }
 .wf-panel {
-  padding: 24px 26px;
+  padding: 22px 24px;
   background: #fff;
+  border: 1.5px solid var(--wf-line);
   border-radius: var(--wf-r-card);
-  box-shadow: var(--wf-shadow);
 }
 .wf-panel-h { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
-.wf-panel-t { font-size: 17px; font-weight: 700; color: var(--wf-navy); }
+.wf-panel-t {
+  font-family: var(--wf-font-cond);
+  font-size: 21px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  line-height: 1.1;
+  color: var(--wf-navy);
+}
 .wf-panel-h .wf-spacer { margin-left: auto; }
 
 /* --- horizontal bar chart --- */
 .wf-bars { display: grid; gap: 14px; }
+/* minmax(0,...) on the label so a long phase name shrinks instead of pushing
+   the track off a phone. */
 .wf-bar-row {
   display: grid;
-  grid-template-columns: 160px 1fr 62px;
+  grid-template-columns: minmax(0, 160px) 1fr minmax(0, 62px);
   align-items: center;
   gap: 16px;
 }
 .wf-bar-label { font-size: 14px; color: var(--wf-navy); }
-.wf-bar-track { height: 20px; border-radius: var(--wf-r-pill); background: var(--wf-band); overflow: hidden; }
-.wf-bar-fill  { display: block; height: 20px; border-radius: var(--wf-r-pill); background: var(--wf-steel-2); }
-.wf-bar-n { font-size: 13.5px; color: var(--wf-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.wf-bar-track { height: 10px; border-radius: var(--wf-r-pill); background: var(--wf-line); overflow: hidden; }
+.wf-bar-fill  { display: block; height: 10px; border-radius: var(--wf-r-pill); background: var(--wf-steel-2); }
+.wf-bar-n { font-size: 13.5px; font-weight: 600; color: var(--wf-muted); text-align: right; font-variant-numeric: tabular-nums; }
 .wf-bar-row.is-hot .wf-bar-label,
-.wf-bar-row.is-hot .wf-bar-n { color: var(--wf-ember); font-weight: 600; }
+.wf-bar-row.is-hot .wf-bar-n { color: var(--wf-ember); font-weight: 700; }
 .wf-bar-row.is-hot .wf-bar-fill { background: var(--wf-ember); }
 
 /* --- stacked meter + legend --- */
-.wf-meter { display: flex; height: 30px; border-radius: var(--wf-r-pill); overflow: hidden; }
+.wf-meter { display: flex; height: 28px; border-radius: var(--wf-r-pill); overflow: hidden; background: var(--wf-line); }
 .wf-legend { display: grid; gap: 12px; font-size: 14px; margin-top: 18px; }
 .wf-legend-row { display: flex; align-items: center; gap: 11px; }
 .wf-dot { width: 12px; height: 12px; border-radius: var(--wf-r-pill); flex: none; }
-.wf-legend-n { margin-left: auto; color: var(--wf-muted); font-variant-numeric: tabular-nums; }
+.wf-legend-n { margin-left: auto; font-weight: 600; color: var(--wf-muted); font-variant-numeric: tabular-nums; }
 
 .wf-callout {
   margin-top: auto;
   padding: 16px 18px;
   border-radius: var(--wf-r-tile);
   background: var(--wf-navy);
-  color: #eef3f8;
+  color: #fff;
 }
-.wf-callout-k { font-size: 12.5px; color: #a9b8c7; }
-.wf-callout-v { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.wf-callout-k {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, .7);
+}
+.wf-callout-v {
+  font-family: var(--wf-font-cond);
+  font-size: 30px; font-weight: 700; line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
 
 /* --- flat list rows (dashboard "needs a look") --- */
 .wf-list { display: grid; gap: 2px; }
@@ -389,48 +490,63 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   padding: 15px 4px;
   border-top: 1px solid var(--wf-band);
 }
-.wf-row:hover { background: rgba(20, 41, 61, .035); }
-.wf-job { font-size: 15px; font-weight: 600; color: var(--wf-navy); }
+.wf-row:hover { background: var(--wf-ground); }
+.wf-job { font-size: 15px; font-weight: 700; color: var(--wf-navy); }
 .wf-jobsub { font-size: 12.5px; color: var(--wf-faint); }
 .wf-actions { display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
 
 /* --- job cards (work board / my jobs / approvals) --- */
 .wf-group-h { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; }
-.wf-group-t { font-size: 17px; font-weight: 700; color: var(--wf-navy); }
+.wf-group-t {
+  font-family: var(--wf-font-cond);
+  font-size: 21px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  line-height: 1.1;
+  color: var(--wf-navy);
+}
 .wf-group-n {
-  padding: 3px 11px;
+  padding: 3px 12px;
   border-radius: var(--wf-r-pill);
   background: var(--wf-band);
   font-size: 12.5px;
+  font-weight: 700;
   color: var(--wf-muted);
 }
-.wf-cards { display: grid; gap: 10px; margin-bottom: 28px; }
+.wf-cards { display: grid; gap: 9px; margin-bottom: 28px; }
 .wf-card {
   display: grid;
   align-items: center;
   gap: 20px;
-  padding: 18px 22px;
+  padding: 16px 20px;
   background: #fff;
+  border: 1.5px solid var(--wf-line);
   border-radius: var(--wf-r-tile);
   border-left: 5px solid var(--wf-line);
-  box-shadow: var(--wf-shadow);
 }
-.wf-card:hover { box-shadow: var(--wf-shadow-lift); }
+/* The edge, not a lift: status already owns the left rail, so hover only has
+   to say "this row is under the cursor". */
+.wf-card:hover { border-color: var(--wf-navy); }
 .wf-card.is-running { border-left-color: var(--wf-go); }
-.wf-card.is-open    { border-left-color: var(--wf-line); }
+.wf-card.is-open    { border-left-color: var(--wf-faint); }
 .wf-card.is-review  { border-left-color: var(--wf-amber); }
 .wf-card.is-late    { border-left-color: var(--wf-ember); }
-.wf-card-t { font-size: 15.5px; font-weight: 600; color: var(--wf-navy); }
+.wf-card:hover.is-running { border-left-color: var(--wf-go); }
+.wf-card:hover.is-review  { border-left-color: var(--wf-amber); }
+.wf-card:hover.is-late    { border-left-color: var(--wf-ember); }
+.wf-card-t { font-size: 15.5px; font-weight: 700; color: var(--wf-navy); }
 .wf-card-s { font-size: 12.5px; color: var(--wf-faint); }
-.wf-timer { font-size: 14px; color: var(--wf-muted); font-variant-numeric: tabular-nums; }
+.wf-timer { font-size: 14px; font-weight: 600; color: var(--wf-muted); font-variant-numeric: tabular-nums; }
 
+/* Empty state is a tile, not a card: filled and flat so it never competes with
+   real work sitting next to it. */
 .wf-empty {
   padding: 26px;
   border-radius: var(--wf-r-tile);
-  background: #fff;
-  box-shadow: var(--wf-shadow);
+  background: var(--wf-band);
   color: var(--wf-muted);
-  font-size: 13.5px;
+  font-size: 14px;
 }
 
 /* a block whose data is not wired to the API yet */
@@ -438,23 +554,37 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* --- charts (Chart.js hosts, kept from the old sheet) --- */
 .chart-row { display: flex; gap: 20px; flex-wrap: wrap; }
-.chart-box { flex: 1; min-width: 320px; height: 260px; position: relative; }
+.chart-box { flex: 1; min-width: 280px; height: 260px; position: relative; }
 .chart-box.wide { min-width: 100%; height: 320px; }
 
 /* --- small surfaces (card back section, badges) --- */
 .wf-compact { padding: 12px; }
 .wf-compact .wf-panel { padding: 14px 16px; border-radius: 14px; }
+.wf-compact .wf-panel-t { font-size: 17px; }
 .wf-compact .wf-stats { grid-template-columns: repeat(2, 1fr); gap: 10px; }
-.wf-compact .wf-stat { padding: 12px 14px; }
-.wf-compact .wf-stat-v { font-size: 26px; }
+.wf-compact .wf-stat { padding: 11px 13px; }
+.wf-compact .wf-stat-v { font-size: 28px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .slider-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
 .slider-row input[type=range] { flex: 1; }
-.slider-row .pct { width: 42px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.slider-row .pct { min-width: 44px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
 
 @media (max-width: 1100px) {
   .wf-stats { grid-template-columns: repeat(2, 1fr); }
   .wf-panels.split, .wf-panels.halves { grid-template-columns: 1fr; }
+}
+
+/* On a phone the chrome eats the page. Shed padding before shedding type --
+   this thing gets read in a shop, often at arm's length. */
+@media (max-width: 600px) {
+  body { padding: 12px; }
+  .wf-top { padding: 12px 14px; gap: 12px; flex-wrap: wrap; }
+  .wf-tabbar { padding: 10px 12px; overflow-x: auto; }
+  .wf-body { padding: 18px 14px 28px; }
+  .wf-panel { padding: 16px 16px; }
+  .wf-h1 { font-size: 26px; }
+  .wf-stat-v { font-size: 36px; }
+  .wf-bar-row { grid-template-columns: minmax(0, 92px) 1fr minmax(0, 44px); gap: 10px; }
 }
 
 
@@ -471,12 +601,15 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   overflow-x: auto;
   padding: 2px 2px 14px;
 }
+/* White on the grey shell rather than the mock's grey-on-white: the column has
+   to separate from --wf-ground, and inverting it here keeps the cards inside
+   legible without a shadow. */
 .wf-col {
   flex: 0 0 296px;
   background: #fff;
-  border-radius: var(--wf-r-tile);
-  box-shadow: var(--wf-shadow);
-  border-top: 4px solid var(--wf-steel);
+  border: 1.5px solid var(--wf-line);
+  border-top: 5px solid var(--wf-steel);
+  border-radius: var(--wf-r-card);
   overflow: hidden;
 }
 /* Collapsed keeps its place in the row -- the header is the handle you click to
@@ -487,7 +620,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 11px 13px;
+  padding: 12px 14px;
   cursor: pointer;
   user-select: none;
 }
@@ -495,16 +628,20 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .wf-col-caret { width: 11px; font-size: 12px; color: var(--wf-muted); }
 .wf-col-t {
   flex: 1;
-  font-size: 14px;
+  font-family: var(--wf-font-cond);
+  font-size: 18px;
   font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .03em;
   color: var(--wf-navy);
-  line-height: 1.25;
+  line-height: 1.15;
 }
 .wf-col-n {
-  padding: 2px 9px;
+  padding: 2px 10px;
   border-radius: var(--wf-r-pill);
   background: var(--wf-band);
   font-size: 12px;
+  font-weight: 700;
   color: var(--wf-muted);
   white-space: nowrap;
 }
