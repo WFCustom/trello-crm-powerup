@@ -161,11 +161,13 @@
           return p.then(function () { return ctx.syncCard(card.id); });
         }
       }));
+      // Was a bare WFPhase.complete(), which set pendingApproval and left the
+      // card waiting for a manager who is no longer part of the flow. Same
+      // checklist as My jobs, from the same place, so the two can't drift.
       actions.appendChild(O.btn("Mark done", {
-        primary: true, busyText: "Finishing…",
+        primary: true,
         onClick: function () {
-          return WFPhase.complete(ctx.t, meta)
-            .then(function () { return ctx.syncCard(card.id); });
+          WFChecklist.open(ctx, card, stage, function () { return ctx.syncCard(card.id); });
         }
       }));
       if (!mine) actions.firstChild.title = "Claimed by " + O.displayName(w.claimedBy);

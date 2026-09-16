@@ -94,65 +94,9 @@
     });
   }
 
-  /**
-   * Self-check: the drafter works their own list and signs it. Ticking every
-   * line advances the job; leaving one unticked just means it isn't finished, so
-   * nothing moves and nothing is blamed on anyone.
-   */
-  function openSelfCheck(ctx, card, stage) {
-    var phase = stage ? stage.name : "";
-    WFQC.getTemplate(ctx.t, phase).then(function (template) {
-      var items = template.length ? template : ["Work is complete and correct"];
-      var rows = [];
-      var body = O.el("div");
-
-      items.forEach(function (text) {
-        var box = O.el("input", { type: "checkbox" });
-        var note = O.el("input", { type: "text", placeholder: "What's outstanding? (optional)" });
-        note.style.display = "";
-        box.addEventListener("change", function () {
-          note.style.display = box.checked ? "none" : "";
-        });
-        rows.push({ text: text, box: box, note: note });
-        body.appendChild(O.el("div", { style: "padding:10px 0;border-bottom:1px solid var(--wf-band)" },
-          O.el("label", { style: "display:flex;align-items:center;gap:10px;margin:0;font-weight:400" },
-            box, O.el("span", { style: "font-size:14px;color:var(--wf-text)", text: text })),
-          O.el("div", { style: "margin-top:6px" }, note)));
-      });
-
-      var status = O.el("div.hint", { style: "margin-top:12px" });
-
-      O.dialog({
-        title: phase + " checklist",
-        note: card.name,
-        content: O.el("div", null, body, status,
-          O.el("div.hint", { style: "margin-top:12px",
-            text: "Tick everything and the job moves on. Anything left unticked keeps it with you — "
-                + "it's saved, so you can come back to it." })),
-        buttons: [{
-          label: "Sign off and move it on", primary: true, busyText: "Signing…",
-          onClick: function () {
-            var results = rows.map(function (r) {
-              return { text: r.text, result: r.box.checked ? "pass" : "fail", note: r.note.value };
-            });
-            return WFQC.submitSelfCheck(ctx.t, meta(ctx, card), phase, ctx.member, results)
-              .then(function (res) {
-                if (!res.passed) {
-                  window.alert("Still to do:\n\n" +
-                    res.outstanding.map(function (i) {
-                      return "• " + i.text + (i.note ? " — " + i.note : "");
-                    }).join("\n") +
-                    "\n\nSaved. The job stays with you until these are ticked.");
-                }
-                return ctx.syncCard(card.id);
-              });
-          }
-        }]
-      });
-    }).catch(function (e) {
-      window.alert((e && e.message) || "Couldn't open the checklist.");
-    });
-  }
+  /* The self-check dialog moved to popups/checklist.js (WFChecklist.open) so
+     the Work board could use the same one. It was the only copy; leaving a
+     second here is how two surfaces end up asking for different things. */
 
   function activeCard(ctx, card, stage) {
     var w = O.activeWork(card);
@@ -185,26 +129,33 @@
               }
             }),
             O.btn("Open card", { quiet: true, onClick: function () { O.openCard(card); } }),
-            /* Three ways to finish a phase:
-                 self-checked (CAD)  -- work your own list, signing advances it
+            /* EVERY PHASE ENDS WITH A CHECKLIST. What varies is who signs it.
                  peer-checked (shop) -- hand it to someone else to check
-                 everything else     -- straight to manager approval, as before
-               See WFQC.qcPhases and WFQC.selfCheckPhases. */
-            WFQC.requiresSelfCheck(stage ? stage.name : "")
-              ? O.btn("I'm done — run my checklist", {
-                  primary: true,
-                  onClick: function () { openSelfCheck(ctx, card, stage); }
-                })
-              : WFQC.requiresQc(stage ? stage.name : "")
+                 everything else     -- work your own list, signing advances it
+
+               The third branch used to call WFPhase.complete() bare, which set
+               pendingApproval and left the card sitting for a manager. That was
+               already stranding jobs -- the phases with no checklist are the
+               ones nobody thinks to go looking for in an approvals queue -- and
+               once Approvals is retired it would strand them permanently, with
+               no screen anywhere showing them.
+
+               A phase with no saved checklist is not a phase with no gate: the
+               self-check falls back to a single "Work is complete and correct"
+               line, so somebody still puts their name to it and the job still
+               moves. See WFQC.qcPhases and WFQC.selfCheckPhases for which
+               phases ask for a second pair of eyes. */
+            WFQC.requiresQc(stage ? stage.name : "")
               ? O.btn("I'm done — send for QC", {
                   primary: true,
                   onClick: function () { openQcChooser(ctx, card, stage); }
                 })
-              : O.btn("I'm done with this phase", {
-                  primary: true, busyText: "Sending for approval…",
+              : O.btn("I'm done — run my checklist", {
+                  primary: true,
                   onClick: function () {
-                    return WFPhase.complete(ctx.t, meta(ctx, card))
-                      .then(function () { return ctx.syncCard(card.id); });
+                    WFChecklist.open(ctx, card, stage, function () {
+                      return ctx.syncCard(card.id);
+                    });
                   }
                 })),
           reassignRow(ctx, card, stage))));
