@@ -718,19 +718,32 @@
     titleRow.appendChild(iconRow(st));
     box.appendChild(titleRow);
 
-    // A station that can't reach the card still has to draw the station, so the
-    // whole fetch sits inside a promise chain: a missing endpoint costs you the
-    // picture, not the column.
-    var shot = O.el("div.wf-fl-cover");
+    /* NOTHING IS DRAWN UNTIL THERE IS A PICTURE.
+     *
+     * This used to append an empty grey frame straight away and remove it again
+     * if no cover came back -- so a card with no image flashed a grey box and
+     * then collapsed, and every repaint did it again. That is the flicker: not
+     * the preview vanishing, but a placeholder that should never have been
+     * there appearing first.
+     *
+     * The slot is a zero-height anchor that only becomes a frame once an image
+     * actually resolves, so a card without one simply never has a gap.
+     *
+     * A station that cannot reach the card still has to draw the station, so
+     * the whole fetch sits inside a promise chain: a missing endpoint costs the
+     * picture, not the column. */
+    var shot = O.el("div");
     box.appendChild(shot);
     Promise.resolve()
       .then(function () { return WFRest.getCardDetail(state.ctx.t, st.job.id); })
       .then(function (full) {
         var url = WFCardView.coverFrom(full);
-        if (!url) throw new Error("no cover");
+        // The column may have been repainted while this was in flight.
+        if (!url || !shot.isConnected) return;
+        shot.className = "wf-fl-cover";
         shot.appendChild(O.el("img", { src: url, alt: "", loading: "lazy" }));
       })
-      .catch(function () { if (shot.parentNode) shot.parentNode.removeChild(shot); });
+      .catch(function () { /* no picture, no frame, no gap */ });
 
     var who = WFTables.activeWork(st.job);
     var person = (who && who.claimedBy) ? O.displayName(who.claimedBy) : st.station.welder;
@@ -1073,8 +1086,60 @@
       arrows.appendChild(arrow("▼", i === ids.length - 1, function () { move(st, ids, i, 1); }));
       row.appendChild(arrows);
       box.appendChild(row);
+
+      // Send it somewhere else. The queue is the one place you can see the
+      // whole backlog for a bench, so it is where somebody realises this job
+      // belongs on a different one -- making them go to the other station and
+      // hunt for it in an assign list is the long way round.
+      var others = movableTo(st);
+      if (others.length) {
+        var to = O.el("select.wf-fl-sel", { style: "margin:2px 0 10px" });
+        to.appendChild(O.el("option", { value: "", text: "Move to another station…" }));
+        others.forEach(function (o) {
+          to.appendChild(O.el("option", {
+            value: o.station.id,
+            text: o.station.table + (o.phase && o.phase !== st.phase ? " · " + o.phase : "")
+          }));
+        });
+        to.addEventListener("change", function () {
+          if (!to.value) return;
+          moveToStation(st, c, to.value);
+        });
+        box.appendChild(to);
+      }
     });
     return box;
+  }
+
+  /**
+   * Stations this job could go to instead.
+   *
+   * Only ones pulling the same phase: a bench that draws from another list will
+   * never show the card, so offering it would be a move that looks like it
+   * worked and then loses the job. Ones on another screen are included and
+   * labelled, because the finishing bay is exactly where a shop job legitimately
+   * needs sending.
+   */
+  function movableTo(st) {
+    var all = WFTables.areas().reduce(function (acc, a) {
+      return acc.concat(WFTables.areaState(
+        state.ctx.boardCfg, state.cards, state.cfg, a.id));
+    }, []);
+    return all.filter(function (o) {
+      return o.station.id !== st.station.id && o.phase && o.phase === st.phase;
+    });
+  }
+
+  function moveToStation(st, card, stationId) {
+    var target = movableTo(st).filter(function (o) {
+      return o.station.id === stationId;
+    })[0];
+    if (!target) return;
+    write(st, function () {
+      // End of the destination's queue: it has its own order and dropping a
+      // card into the middle of it would reshuffle somebody else's day.
+      return WFTables.setStation(state.ctx.t, card, stationId, target.queue.length);
+    }, { keepView: "queue" });
   }
 
   function arrow(glyph, off, fn) {

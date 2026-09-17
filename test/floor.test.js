@@ -347,6 +347,35 @@ test("a finished job is not offered to the assign view either", () => {
   assert.equal(pool.length, 0, "finished work is not unassigned work");
 });
 
+test("after a switch the station shows what is running, not what was paused", () => {
+  /* THE BUG THIS EXISTS FOR.
+   *
+   * Pausing A and starting B leaves BOTH cards carrying this station's
+   * tableId -- A parked at the front of the queue, B on the clock. Taking the
+   * first match meant the station often kept showing A, so switching looked
+   * like it had silently failed and people tapped it again.
+   */
+  const { T } = boot();
+  const s = ONE_STATION.stations[0];
+
+  const paused = job("A", "LA", { claimed: KEV, pct: 65 });
+  paused.phaseWork.tableId = "s1";
+  paused.phaseWork.queuePos = -1;
+
+  const running = job("B", "LA", { claimed: KEV, running: true });
+  running.phaseWork.tableId = "s1";
+
+  // Paused one first in the array, so order cannot be what saves this.
+  const st = T.stationState(BOARD, [paused, running], s);
+  assert.equal(st.job.id, "B", "the job on the clock owns the station");
+  assert.ok(st.queue.some((c) => c.id === "A"), "the paused one is back in the queue");
+
+  // And with nothing running, the paused job keeps the slot rather than the
+  // station going Open with work sitting on it.
+  const idle = T.stationState(BOARD, [paused], s);
+  assert.equal(idle.job.id, "A");
+});
+
 test("work left over from an earlier phase is ignored", () => {
   const { T } = boot();
   const stale = job("B", "LA", { claimed: KEV, running: true });
@@ -663,7 +692,11 @@ test("the cover is the card's image, never cropped", async () => {
   assert.match(textOf(node), /Station #1/);
 });
 
-test("a card with no picture drops the frame rather than leaving a grey box", async () => {
+test("a card with no picture never draws a frame at all", async () => {
+  /* Not "removes it afterwards" -- never draws it. The old version appended an
+   * empty grey frame immediately and deleted it when no cover came back, so a
+   * card without one flashed a box and then collapsed, on every repaint. That
+   * flicker is what looked like the preview disappearing. */
   const env = boot({
     role: "worker",
     saved: ONE_STATION,
@@ -671,6 +704,9 @@ test("a card with no picture drops the frame rather than leaving a grey box", as
   });
   env.win.WFRest.getCardDetail = () => Promise.resolve({ id: "B", attachments: [] });
   const node = await render(env, 1280);
+
+  // Before the fetch resolves, and after: no frame either way.
+  assert.equal($(node, ".wf-fl-cover").length, 0, "nothing drawn up front");
   await new Promise((r) => setTimeout(r, 0));
   assert.equal($(node, ".wf-fl-cover").length, 0);
 });
