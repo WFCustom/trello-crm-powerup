@@ -43,7 +43,13 @@
       ".wf-eos-hero-t{font-family:'Barlow Condensed',inherit;font-size:34px;line-height:1;",
       "font-weight:700;letter-spacing:.02em;text-transform:uppercase}",
       ".wf-eos-hero-s{font-size:13.5px;opacity:.82;margin-top:6px;max-width:52ch}",
-      ".wf-eos-hero-sp{margin-left:auto;display:flex;gap:26px;flex-wrap:wrap}",
+      ".wf-eos-hero-sp{display:flex;gap:26px;flex-wrap:wrap}",
+      /* The right-hand stack: the "i" sits above the numbers, right-aligned to
+         them, so the band reads title-left / measures-right with one small
+         affordance over the top rather than a button loose in the corner. */
+      ".wf-eos-hero-right{margin-left:auto;display:flex;flex-direction:column;",
+      "align-items:flex-end;gap:12px}",
+      ".wf-eos-hero-infobar{display:flex;justify-content:flex-end}",
       ".wf-eos-hs{min-width:74px}",
       ".wf-eos-hs-v{font-family:'Barlow Condensed',inherit;font-size:27px;font-weight:700;line-height:1}",
       ".wf-eos-hs-k{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.72;margin-top:3px}",
@@ -170,7 +176,8 @@
       ".wf-eos-seg button+button{border-left:1px solid var(--wf-line)}",
       ".wf-eos-seg button.is-on{background:var(--wf-navy);color:#fff;font-weight:600}",
       "@media (max-width:640px){.wf-eos-hero{padding:20px}.wf-eos-hero-t{font-size:26px}",
-      ".wf-eos-hero-sp{margin-left:0;gap:18px}.wf-eos-r{flex:1 1 44%}}"
+      ".wf-eos-hero-right{margin-left:0;align-items:flex-start;width:100%}",
+      ".wf-eos-hero-sp{gap:18px}.wf-eos-r{flex:1 1 44%}}"
     ].join("");
     var tag = document.createElement("style");
     tag.id = "wf-eos-styles";
@@ -246,6 +253,55 @@
 
   /* ------------------------------------------------------------------ hero */
 
+  /**
+   * The questions that get issues out of a quiet room.
+   *
+   * REFERENCE ONLY, AND THAT IS THE POINT. It files nothing, changes nothing
+   * and remembers nothing. An IDS session stalls when nobody wants to go
+   * first, and what unsticks it is a better question rather than another field
+   * to fill in -- the moment this captured answers it would become a form, and
+   * nobody opens a form mid-conversation.
+   *
+   * Semi-opaque rather than a solid dialog so the issue list stays visible
+   * underneath: you read a question and go back to the room, you do not leave
+   * the screen.
+   */
+  var IDS_QUESTIONS = [
+    "What are we not talking about that we should be?",
+    "What's frustrating us, or slowing us down?",
+    "What could make things better or simpler?",
+    "Any recurring patterns, or feedback from customers or employees?"
+  ];
+
+  function openInfo() {
+    var back = O.el("div.wf-info-back");
+    function close() {
+      document.removeEventListener("keydown", onKey, true);
+      if (back.parentNode) back.parentNode.removeChild(back);
+    }
+    function onKey(e) { if (e.key === "Escape") { e.stopPropagation(); close(); } }
+
+    back.appendChild(O.el("div.wf-info-box", null,
+      O.el("div.wf-info-h", null,
+        O.el("div.wf-panel-t", { text: "Identify · Discuss · Solve" }),
+        O.btn("Close", { small: true, quiet: true, onClick: close })),
+      O.el("div.wf-info-sub", {
+        text: "Problems · challenges · obstacles · ideas · " +
+              "opportunities · decisions · blocks"
+      }),
+      O.el("div.wf-info-list", null, IDS_QUESTIONS.map(function (q) {
+        return O.el("div.wf-info-q", { text: q });
+      })),
+      O.el("div.wf-info-foot", {
+        text: "Keep it concise. Anything worth keeping goes on the board — " +
+              "this is only here to get the room talking."
+      })));
+
+    back.addEventListener("click", function (e) { if (e.target === back) close(); });
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(back);
+  }
+
   function heroStat(label, value) {
     return O.el("div.wf-eos-hs", null,
       O.el("div.wf-eos-hs-v", { text: String(value) }),
@@ -270,6 +326,18 @@
       heroStat("rocks on track", prog.total ? (prog.done + "/" + prog.total) : "—"),
       heroStat("solved", solved.length));
 
+    // The "i" sits above the numbers rather than in the window chrome: these
+    // questions are EOS material, and they are wanted at the moment somebody
+    // is looking at this band deciding what to raise.
+    var info = O.el("button.wf-info", {
+      type: "button", text: "i",
+      title: "Questions that surface issues",
+      "aria-label": "Questions that surface issues",
+      onClick: openInfo
+    });
+    var right = O.el("div.wf-eos-hero-right", null,
+      O.el("div.wf-eos-hero-infobar", null, info), strip);
+
     var file = O.btn("File an issue or idea", {
       primary: true,
       onClick: function () { openIntake(); }
@@ -286,7 +354,7 @@
                   "promised this quarter."
           }),
           O.el("div", { style: "margin-top:14px" }, file)),
-        strip));
+        right));
   }
 
   /* ------------------------------------------------------------------ rail */
