@@ -339,6 +339,48 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   font-size: 11px; font-weight: 800; color: #fff;
 }
 
+/* --- kiosk mode ---------------------------------------------------------
+   The shop floor wants the whole screen. On a TV across a room, a tab bar is
+   chrome nobody is going to click; on a desk it still has to be one motion
+   away, so it hides and comes back when the pointer nears the top rather than
+   disappearing behind a keyboard shortcut nobody will remember.
+
+   It slides rather than vanishing, and it keeps a light edge and a shadow so
+   that when it is down it reads as a panel laid over the screen instead of a
+   band that was always there. */
+.wf-chrome {
+  transition: transform .22s ease, box-shadow .22s ease;
+}
+.wf-shell.is-kiosk .wf-chrome {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 60;
+  transform: translateY(-100%);
+  border-bottom: 1px solid rgba(255, 255, 255, .22);
+  box-shadow: 0 18px 40px rgba(3, 10, 22, .55);
+}
+.wf-shell.is-kiosk.is-peek .wf-chrome { transform: none; }
+/* The body owns its own top padding normally; with the chrome lifted out of
+   the flow there is nothing above it to pad away from. */
+.wf-shell.is-kiosk .wf-body { padding-top: 0; }
+/* A full-bleed tab cancels the body padding with negative margins. With the
+   padding already gone in kiosk, the top one would pull it off the screen. */
+.wf-shell.is-kiosk .wf-fl { margin-top: 0; }
+
+/* A thin handle so the bar is discoverable without hunting: visible only while
+   hidden, and it disappears the moment the chrome comes down. */
+.wf-shell.is-kiosk .wf-chrome:after {
+  content: "";
+  position: absolute;
+  left: 50%; bottom: -5px;
+  width: 54px; height: 4px;
+  margin-left: -27px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .34);
+  transition: opacity .18s ease;
+}
+.wf-shell.is-kiosk.is-peek .wf-chrome:after { opacity: 0; }
+
 /* --- the "i" and its panel ---------------------------------------------- */
 
 .wf-info {

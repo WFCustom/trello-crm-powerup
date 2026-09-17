@@ -38,44 +38,90 @@
   (function injectStyles() {
     if (document.getElementById("wf-floor-styles")) return;
     var css = [
-      ".wf-fl{--p-bg:#0f2340;--p-panel:#f3f5f8;--p-tile:#e4e9f0;--p-track:#cfd7e2;",
+      /* THE FLOOR IS A NAVY PAGE WITH WHITE CARDS ON IT.
+       *
+       * Not a tab inside the grey ops shell -- that was the mistake here for
+       * several passes. The mock is a full-viewport navy field and the stations
+       * are white cards floating on it, and the reason is not taste: this
+       * screen is read from across a shop, often off a TV, and white-on-navy
+       * carries at ten feet where grey-on-grey does not.
+       *
+       * The negative margins break out of .wf-body's padding so the navy runs
+       * edge to edge. Every value below is from the approved mock. */
+      ".wf-fl{--p-bg:#0f2340;--p-panel:#ffffff;--p-tile:#eef1f6;--p-track:#cfd7e2;",
       "--p-ink:#12213a;--p-muted:#5b6b80;--p-accent:#e8a317;--p-ok:#1f9d63;",
-      "--p-warn:#d9482e;--p-idle:#8896a8}",
+      "--p-warn:#d9482e;--p-idle:#8896a8;",
+      "margin:-30px -32px -40px;padding:22px 26px 30px;background:var(--p-bg);",
+      "min-height:100vh;color:#fff;position:relative}",
 
-      /* --- top bar -------------------------------------------------- */
-      ".wf-fl-top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;",
-      "background:var(--p-bg);color:#fff;border-radius:18px;padding:14px 18px;margin-bottom:14px}",
-      ".wf-fl-area{font-family:'Barlow Condensed',inherit;font-size:24px;font-weight:700;",
-      "letter-spacing:.03em;text-transform:uppercase;line-height:1}",
-      ".wf-fl-tabs{display:flex;gap:6px}",
-      ".wf-fl-tab{cursor:pointer;font:inherit;font-size:13px;font-weight:600;padding:6px 14px;",
-      "border-radius:999px;border:1px solid rgba(255,255,255,.28);background:transparent;color:#fff}",
+      /* THE SEAM.
+       *
+       * The ops window's own header is #0f2340 and so is this canvas, so
+       * without something here the chrome and the floor merge into one navy
+       * slab and the tab bar looks like it is floating in the page.
+       *
+       * Rather than change the mock's navy -- which is the one colour we most
+       * want to be faithful to -- the join is drawn: a hairline of light at the
+       * top edge, and a short shadow falling onto the canvas from above, so the
+       * chrome reads as sitting OVER the floor rather than being part of it.
+       * Costs nothing elsewhere in the Power-Up and is two lines to remove. */
+      ".wf-fl:before{content:'';position:absolute;left:0;right:0;top:0;height:1px;",
+      "background:rgba(255,255,255,.16)}",
+      ".wf-fl:after{content:'';position:absolute;left:0;right:0;top:1px;height:22px;",
+      "background:linear-gradient(rgba(0,0,0,.28),rgba(0,0,0,0));pointer-events:none}",
+
+      /* --- top bar: content on the navy, not a bar sitting on a page -- */
+      ".wf-fl-top{display:flex;align-items:center;gap:16px;flex-wrap:wrap;",
+      "color:#fff;padding:2px 4px 20px}",
+      /* The area reads as the quiet second half of a wordmark, as in the mock:
+         "WESTERN FABRICATION  MAIN SHOP". The ops window supplies the first
+         half in its own header, so repeating it here would be shouting twice. */
+      ".wf-fl-area{font-family:'Barlow Condensed',inherit;font-size:19px;font-weight:700;",
+      "letter-spacing:.14em;text-transform:uppercase;line-height:1;color:rgba(255,255,255,.72)}",
+      ".wf-fl-tabs{display:flex;gap:7px}",
+      ".wf-fl-tab{cursor:pointer;font:inherit;font-size:13px;font-weight:600;padding:7px 16px;",
+      "border-radius:999px;border:1.5px solid rgba(255,255,255,.3);background:transparent;color:#fff}",
+      ".wf-fl-tab:hover{border-color:#fff}",
       ".wf-fl-tab.is-on{background:#fff;color:var(--p-bg);border-color:#fff}",
-      ".wf-fl-clock{margin-left:auto;text-align:right;line-height:1.15}",
-      ".wf-fl-clock b{font-family:'Barlow Condensed',inherit;font-size:26px;font-weight:700;display:block}",
-      ".wf-fl-clock span{font-size:11.5px;opacity:.72;letter-spacing:.06em;text-transform:uppercase}",
-      ".wf-fl-top button.wf-btn{background:rgba(255,255,255,.14);border-color:transparent;color:#fff}",
+      ".wf-fl-clock{margin-left:auto;text-align:right;line-height:1.1}",
+      ".wf-fl-clock b{font-family:'Barlow Condensed',inherit;font-size:30px;font-weight:700;display:block}",
+      ".wf-fl-clock span{font-size:11px;opacity:.7;letter-spacing:.11em;text-transform:uppercase}",
+      ".wf-fl-top button.wf-btn{background:transparent;border:1.5px solid rgba(255,255,255,.3);",
+      "color:#fff}",
+      ".wf-fl-top button.wf-btn:hover{border-color:#fff;background:rgba(255,255,255,.12)}",
 
-      /* --- summary strip -------------------------------------------- */
-      ".wf-fl-sum{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:14px}",
-      ".wf-fl-s{flex:1 1 120px;background:#fff;border:1px solid var(--p-track);border-radius:16px;",
-      "padding:10px 14px}",
+      /* --- summary strip: translucent on the navy, never a white bar --- */
+      ".wf-fl-sum{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}",
+      ".wf-fl-s{flex:1 1 120px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);",
+      "border-radius:16px;padding:10px 14px}",
       ".wf-fl-s b{font-family:'Barlow Condensed',inherit;font-size:26px;font-weight:700;",
-      "display:block;line-height:1;color:var(--p-ink)}",
-      ".wf-fl-s span{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--p-muted)}",
+      "display:block;line-height:1;color:#fff}",
+      ".wf-fl-s span{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;",
+      "color:rgba(255,255,255,.66)}",
 
-      /* --- station grid --------------------------------------------- */
-      ".wf-fl-grid{display:grid;gap:13px;align-items:start}",
-      ".wf-fl-col{background:var(--p-panel);border-radius:22px;padding:16px 17px 17px;",
-      "border-top:5px solid var(--s,var(--p-idle));display:flex;flex-direction:column;gap:12px;min-width:0}",
+      /* --- station cards: WHITE, floating on the navy ----------------- */
+      ".wf-fl-grid{display:grid;gap:16px;align-items:start}",
+      /* Lift, not outline. On navy a dark shadow alone does almost nothing --
+         it is the thin light edge that separates a white card from the field,
+         and the long soft shadow underneath that makes it sit above rather
+         than sit in. Both together read as a physical card on a dark wall,
+         which is the whole point of this screen. */
+      ".wf-fl-col{background:var(--p-panel);border-radius:26px;padding:20px 20px 22px;",
+      "display:flex;flex-direction:column;gap:12px;min-width:0;color:var(--p-ink);",
+      "box-shadow:0 0 0 1px rgba(255,255,255,.22),0 22px 44px rgba(3,10,22,.55),",
+      "0 4px 10px rgba(3,10,22,.32)}",
+      /* Header, straight off the mock: station name large and condensed, status
+         with its dot pushed right, the type-and-operator line in small tracked
+         caps beneath, then a solid rule in the status colour. */
       ".wf-fl-h{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}",
-      ".wf-fl-name{font-family:'Barlow Condensed',inherit;font-size:21px;font-weight:700;",
-      "letter-spacing:.02em;text-transform:uppercase;color:var(--p-ink);line-height:1}",
-      ".wf-fl-st{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;",
-      "color:var(--s);margin-left:auto;white-space:nowrap}",
+      ".wf-fl-name{font-family:'Barlow Condensed',inherit;font-size:30px;font-weight:700;",
+      "letter-spacing:.01em;color:var(--p-ink);line-height:1}",
+      ".wf-fl-st{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;",
+      "letter-spacing:.1em;text-transform:uppercase;color:var(--s);margin-left:auto;white-space:nowrap}",
       ".wf-fl-st i{width:9px;height:9px;border-radius:50%;background:var(--s);display:block}",
-      ".wf-fl-who{font-size:12.5px;color:var(--p-muted);width:100%;margin-top:-4px}",
-      ".wf-fl-rule{height:3px;border-radius:2px;background:var(--s);opacity:.55}",
+      ".wf-fl-who{font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;",
+      "color:var(--p-muted);width:100%;margin-top:2px}",
+      ".wf-fl-rule{height:4px;border-radius:2px;background:var(--s);margin-top:2px}",
 
       ".wf-fl-k{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;",
       "color:var(--p-muted);font-weight:700}",
@@ -223,7 +269,10 @@
       "display:flex;flex-direction:column;gap:3px;font-size:12px}",
       ".wf-fl-stamp b{font-family:'Barlow Condensed',inherit;font-size:20px;letter-spacing:.03em}",
 
-      "@media (max-width:600px){.wf-fl-top{padding:12px 14px}.wf-fl-area{font-size:20px}",
+      /* .wf-body carries different padding on a phone, so the full-bleed
+         margins have to match it or the navy stops short of the edges. */
+      "@media (max-width:600px){.wf-fl{margin:-18px -14px -28px;padding:16px 14px 22px}",
+      ".wf-fl-top{padding:2px 2px 14px}.wf-fl-area{font-size:16px}",
       ".wf-fl-clock b{font-size:21px}",
       ".wf-fl-icons{gap:4px}.wf-fl-ic{width:27px;height:27px}",
       ".wf-fl-run{flex-direction:column}}"
@@ -1860,6 +1909,10 @@
   O.tab({
     id: "floor",
     label: "Floor",
+    // The shop's screen takes the whole window. The tab bar slides away and
+    // comes back when the pointer nears the top -- on a TV across a room it is
+    // chrome nobody will click, and on a desk it is one motion away.
+    kiosk: true,
     // No roles: this is the shop's screen first. What a manager gets extra --
     // the clock, the summary strip, station setup -- is gated inside.
     render: function (ctx) {

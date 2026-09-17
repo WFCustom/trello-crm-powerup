@@ -1169,6 +1169,68 @@
     return bar;
   }
 
+  /**
+   * Kiosk mode: a tab declares `kiosk: true` and the window chrome gets out of
+   * its way.
+   *
+   * Pointer-driven rather than a shortcut, because the people this is for are
+   * standing at a bench and will never learn a key combination -- moving
+   * towards the top of the screen is what somebody already does when they want
+   * to leave. 70px of reach, and it stays down for a beat after you drop below
+   * so the bar does not snap away mid-click.
+   *
+   * Touch gets the same behaviour from a tap near the top, since an iPad has no
+   * hover at all and would otherwise have no way back.
+   */
+  var peekTimer = null;
+  function setPeek(on) {
+    var shell = document.querySelector(".wf-shell");
+    if (!shell) return;
+    if (peekTimer) { clearTimeout(peekTimer); peekTimer = null; }
+    if (on) { shell.classList.add("is-peek"); return; }
+    peekTimer = setTimeout(function () { shell.classList.remove("is-peek"); }, 450);
+  }
+
+  function watchForPeek() {
+    if (watchForPeek.done) return;
+    watchForPeek.done = true;
+    document.addEventListener("mousemove", function (e) {
+      var shell = document.querySelector(".wf-shell");
+      if (!shell || !shell.classList.contains("is-kiosk")) return;
+      setPeek(e.clientY < 70);
+    });
+    document.addEventListener("touchstart", function (e) {
+      var shell = document.querySelector(".wf-shell");
+      if (!shell || !shell.classList.contains("is-kiosk")) return;
+      var y = e.touches && e.touches[0] ? e.touches[0].clientY : 999;
+      if (y < 70) setPeek(true);
+    }, { passive: true });
+  }
+
+  function setKiosk(on) {
+    var shell = document.querySelector(".wf-shell");
+    if (!shell) return;
+    var was = shell.classList.contains("is-kiosk");
+    shell.classList.toggle("is-kiosk", !!on);
+    watchForPeek();
+
+    if (!on) {
+      // Leaving kiosk: the chrome is back in the flow, so nothing to peek at.
+      if (peekTimer) { clearTimeout(peekTimer); peekTimer = null; }
+      shell.classList.remove("is-peek");
+      return;
+    }
+    if (was) return;
+
+    // Arriving: hold the bar down for a moment before it slides away, so the
+    // first thing somebody sees is where it went rather than that it is gone.
+    shell.classList.add("is-peek");
+    if (peekTimer) clearTimeout(peekTimer);
+    peekTimer = setTimeout(function () {
+      shell.classList.remove("is-peek");
+    }, 1600);
+  }
+
   function renderActive() {
     var view = document.getElementById("view");
     var def = visibleTabs().filter(function (d) { return d.id === active; })[0] || visibleTabs()[0];
@@ -1186,6 +1248,11 @@
     var showing = entries.length
       ? entries.filter(function (e) { return e.id === subTab[def.id]; })[0].def
       : def;
+
+    // A tab can ask for the whole screen. Decided here rather than by the tab
+    // itself so leaving it always puts the chrome back, whatever went wrong
+    // inside it.
+    setKiosk(!!showing.kiosk);
 
     view.innerHTML = '<div class="loading">Loading ' + esc(showing.label.toLowerCase()) + "…</div>";
     return Promise.resolve()

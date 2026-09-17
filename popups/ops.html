@@ -22,13 +22,17 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=Barlow+Condensed:wght@500;600;700&display=swap">
-  <link rel="stylesheet" href="../styles.css?v=20260916f">
+  <link rel="stylesheet" href="../styles.css?v=20260916h">
   <style>
     body { padding: 0; background: var(--wf-ground); }
   </style>
 </head>
 <body>
   <div class="wf-shell">
+    <!-- Header and tab bar are wrapped so kiosk mode can slide both away as
+         one piece. Separately they are two siblings at different heights and
+         hiding them means guessing offsets. -->
+    <div class="wf-chrome">
     <header class="wf-top">
       <div class="wf-brand">
         <img src="../icon.svg" alt="">
@@ -42,6 +46,7 @@
     </header>
 
     <nav class="wf-tabbar" id="tabbar"></nav>
+    </div>
     <main class="wf-body" id="view"><div class="loading">Starting up…</div></main>
   </div>
 
@@ -51,7 +56,7 @@
   <script>
     /* The one place the build number lives. Everything below is written out
        with it appended, so there is no list of URLs to keep in step. */
-    window.WF_BUILD = "20260916f";
+    window.WF_BUILD = "20260916h";
     document.write(
       [
         "../config.js",
