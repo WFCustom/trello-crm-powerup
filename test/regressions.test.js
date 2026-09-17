@@ -52,10 +52,17 @@ test("getBoardCardsFull hands back idBoard, not just asks Trello for it", () => 
    *
    * Asserting on the returned object rather than on the request is the whole
    * point -- the request was already right. */
+  /* Anchored to getBoardCardsFull's own body, not to the file.
+   * getCardDetail also asks for idBoard, so a file-wide match would still pass
+   * with the line this test exists to protect deleted. */
   const source = code("lib/trello-rest.js");
-  assert.match(source, /fields:\s*"[^"]*\bidBoard\b/,
+  const start = source.indexOf("getBoardCardsFull");
+  assert.ok(start > -1, "getBoardCardsFull still exists");
+  const body = source.slice(start, source.indexOf("\n  }\n", start));
+
+  assert.match(body, /fields:\s*"[^"]*\bidBoard\b/,
     "idBoard is requested from Trello");
-  assert.match(source, /\bidBoard:\s*c\.idBoard\b/,
+  assert.match(body, /\bidBoard:\s*c\.idBoard\b/,
     "and idBoard is carried into the object callers actually receive");
 });
 
@@ -180,9 +187,14 @@ test("the SDK overlay writes the QC record under the name every reader uses", ()
    * This is a contract between two files, so it is asserted as one. */
   assert.equal(win.WFQC.KEY, "qcRecord");
 
-  const ops = code("popups/ops.js");
-  assert.ok(!/\bqcRequest\b/.test(ops),
-    "nothing writes qcRequest -- no reader exists for it anywhere in the repo");
+  /* Asserted on ASSIGNMENTS in the raw source rather than on the word in
+   * stripped source. Comments in this file discuss both names by design -- that
+   * is what stops the bug coming back -- and a stripper clever enough to tell a
+   * comment from a regex literal is more machinery than the assertion is worth.
+   * `.qcRequest =` appears in no comment and would appear in the bug. */
+  const ops = read("popups/ops.js");
+  assert.ok(!/\.qcRequest\s*=/.test(ops),
+    "nothing assigns to qcRequest -- no reader exists for it anywhere in the repo");
   // The bulk overlay and syncCard each land one. Both must exist: fixing one
   // and not the other leaves every action after the first still reading stale.
   assert.equal((ops.match(/\.qcRecord\s*=/g) || []).length, 2,
@@ -205,15 +217,21 @@ test("index.html loads everything a card surface needs to move a card", () => {
    * The test harness loads board-extras, so the whole suite saw a board the
    * connector did not have. That is why this is asserted against the HTML. */
   ["index.html", "popups/card-back.html"].forEach((file) => {
-    const html = read(file);
+    // The <script src> list only. These files explain themselves at length and
+    // name every one of these paths in prose first, so a raw indexOf over the
+    // file measures the order of the COMMENTARY, not the order of the tags.
+    const srcs = (read(file).match(/<script\s+src="([^"]+)"/g) || [])
+      .map((m) => m.replace(/^<script\s+src="|"$/g, ""));
+    const at = (dep) => srcs.findIndex((s) => s.indexOf(dep) > -1);
+
     ["lib/board-extras.js", "lib/jobtype.js", "lib/advance.js", "lib/phase.js"]
       .forEach((dep) => {
-        assert.ok(html.includes(dep), file + " loads " + dep);
+        assert.ok(at(dep) > -1, file + " loads " + dep);
       });
     // advance.js wraps what phase.js defines, so it has to come after it.
-    assert.ok(html.indexOf("lib/advance.js") > html.indexOf("lib/phase.js"),
+    assert.ok(at("lib/advance.js") > at("lib/phase.js"),
       file + " loads advance.js after phase.js, or the wrapper wraps nothing");
-    assert.ok(html.indexOf("lib/board-extras.js") > html.indexOf("config.js"),
+    assert.ok(at("lib/board-extras.js") > at("config.js"),
       file + " loads board-extras.js after config.js, or there is no map to extend");
   });
 });
@@ -223,14 +241,34 @@ test("every locally served asset carries a version token", () => {
    * serve a months-old copy through any number of hard refreshes with nothing to
    * show for it. card-back.html was the last live work surface outside the
    * scheme and was loading lib/phase.js and config.js unversioned. */
+  const builds = {};
   ["index.html", "popups/card-back.html", "popups/ops.html"].forEach((file) => {
     const html = read(file);
     const locals = (html.match(/(?:src|href)="((?:\.|\/)[^"]+)"/g) || [])
       .map((m) => m.replace(/^(?:src|href)="|"$/g, ""));
+    assert.ok(locals.length, file + " serves at least one local asset");
     locals.forEach((url) => {
       assert.match(url, /\?v=/, file + " serves " + url + " without a version token");
+      builds[url.split("?v=")[1]] = true;
     });
   });
+
+  /* ops.html emits ~30 script tags from an array via document.write, so they
+   * never appear as a literal src="…" and the sweep above cannot see them. The
+   * thing that versions them is the concatenation; assert on that directly,
+   * or the whole ops window can silently drop out of the scheme. */
+  const ops = read("popups/ops.html");
+  assert.match(ops, /window\.WF_BUILD\s*=\s*"([^"]+)"/);
+  assert.match(ops, /"\?v="\s*\+\s*window\.WF_BUILD/,
+    "ops.html still appends WF_BUILD to every script it writes");
+
+  // And one build number across all three files, or a deploy updates some of
+  // the cache and not the rest -- which is worse than updating none of it.
+  assert.equal(Object.keys(builds).length, 1,
+    "index.html, card-back.html and ops.html are on the same build: " +
+    Object.keys(builds).join(", "));
+  assert.equal(Object.keys(builds)[0], ops.match(/window\.WF_BUILD\s*=\s*"([^"]+)"/)[1],
+    "the tokens on the static tags match the one the scripts are written with");
 });
 
 /* ============================================ finishing a phase always works */

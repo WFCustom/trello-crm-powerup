@@ -579,9 +579,16 @@
       return col;
     }
 
-    // A preview whose card has gone (a reload, a card that moved phase) falls
-    // back to the list it came from rather than drawing an empty frame.
+    /* A VIEW WHOSE SUBJECT HAS GONE FALLS BACK, IT DOES NOT DRAW NOTHING.
+     *
+     * Both of these are reachable: "card" when the job leaves the bench while
+     * somebody is reading it (completed elsewhere, moved phase, a repaint
+     * triggered by another station's write), "preview" when a reload clears the
+     * previewed card. Without the fallback, viewHeader is handed a kind it has
+     * no title or body for and renders a blank white column with a rule and an
+     * ×, which looks like the Power-Up broke rather than like the job moved. */
     if (kind === "preview") kind = "assign";
+    if (kind === "card") kind = "station";
 
     if (kind !== "station") {
       col.appendChild(viewHeader(st, kind));
@@ -835,8 +842,13 @@
    * across the full range is one save, not twenty.
    */
   function percentControl(st) {
-    var pct = WFTables.activeWork(st.job) && typeof st.work.percentComplete === "number"
-      ? Math.max(0, Math.min(100, st.work.percentComplete)) : 0;
+    // One source for both the guard and the value. It used to test
+    // activeWork(st.job) and then read st.work, which are the same object only
+    // because stationState always sets job and work together -- a coincidence
+    // to rely on for a TypeError.
+    var work = WFTables.activeWork(st.job);
+    var pct = work && typeof work.percentComplete === "number"
+      ? Math.max(0, Math.min(100, work.percentComplete)) : 0;
 
     var label = O.el("span", { text: pct + "%" });
     var note = O.el("span", { text: WFTables.isRunning(st.work) ? "running" : "not running" });
@@ -1442,9 +1454,13 @@
         label: next ? "Complete and pass to " + next.name : "Mark complete",
         primary: true, busyText: "Passing it on…",
         onClick: function () {
+          // The delete only runs on a real pass. A dropped or failed write must
+          // leave the signed state exactly where it was.
           return doWrite(st, function () {
             return WFQC.passSigned(state.ctx.t, st.job, st.job);
-          }).then(function () { delete qcState[st.station.id]; });
+          })
+            .then(function () { delete qcState[st.station.id]; })
+            .catch(function (e) { if (!e || !e.dropped) throw e; });
         }
       }]
     });
@@ -1911,7 +1927,19 @@
           buttons: []
         });
       }
-      return Promise.resolve();
+      /* REJECT, DO NOT RESOLVE.
+       *
+       * Resolving here says "that worked" to every caller that chains a .then,
+       * and the thing they chain is usually cleanup -- signOff deletes the
+       * worked checklist, confirmComplete deletes the QC state. A dropped press
+       * would therefore throw away the welder's ticks, their signature and their
+       * signer while writing nothing at all: the precise bug the guard's own
+       * comment claims to have fixed, reintroduced through the guard.
+       *
+       * `dropped` marks it as "never attempted" rather than "failed", so the
+       * error dialog below is not shown twice for one press. */
+      return Promise.reject(Object.assign(
+        new Error("A change is already saving on this station."), { dropped: true }));
     }
     busy[id] = Date.now();
 
@@ -1927,7 +1955,9 @@
       })
       .catch(function (e) {
         busy[id] = false;
-        if (!opts.quiet) {
+        // A dropped press already had its say above; showing a second dialog
+        // for one press is how people learn to dismiss dialogs without reading.
+        if (!opts.quiet && !(e && e.dropped)) {
           O.dialog({
             title: "That didn't go through",
             note: (e && e.message) || "Trello refused the change. Nothing was saved.",
