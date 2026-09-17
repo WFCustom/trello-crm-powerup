@@ -305,7 +305,11 @@
    * `assignedBy`) and leaves `segments` empty -- the same test connector.js uses.
    */
   function isAwaitingStart(work) {
-    return !!(work && work.claimedBy && !work.pendingApproval &&
+    // WFPhase.isFinished, not the raw flag: once complete() stopped writing
+    // pendingApproval, `!work.pendingApproval` was permanently true, so a
+    // finished job with no logged segments would have read as "assigned,
+    // waiting to be started" — inviting somebody to start work that was done.
+    return !!(work && work.claimedBy && !WFPhase.isFinished(work) &&
               (!work.segments || !work.segments.length));
   }
 

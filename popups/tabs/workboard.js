@@ -26,7 +26,12 @@
   function state(card) {
     var w = O.activeWork(card);
     if (!w || !w.claimedBy) return "open";
-    if (w.pendingApproval) return "review";
+    // "review" used to mean "a manager has to approve this". There is no such
+    // step now, so it means what it literally is: the phase was finished and
+    // the card is still here. Reading it through isFinished keeps the state
+    // reachable for cards completed under the old model, which are exactly the
+    // ones somebody needs to see and clear.
+    if (WFPhase.isFinished(w)) return "review";
     // Handed to someone who hasn't tapped Start yet -- distinct from "paused",
     // which would wrongly imply they had already been working on it.
     if (O.isAwaitingStart(w)) return "assigned";
@@ -85,7 +90,9 @@
     var status = O.el("div", { style: "display:flex;align-items:center;gap:12px" });
     if (st === "open") status.appendChild(O.tag("Nobody yet", "quiet"));
     else if (st === "assigned") status.appendChild(O.tag("Not started yet", "warn"));
-    else if (st === "review") status.appendChild(O.tag("Needs your OK", "warn"));
+    // Not "Needs your OK" -- nobody's OK is required any more. It is finished
+    // work that has not moved, which is a fault, not a queue.
+    else if (st === "review") status.appendChild(O.tag("Stuck here", "warn"));
     else {
       status.appendChild(O.tag(O.firstName(w.claimedBy) +
         (st === "running" ? " is on it" : " paused it"), st === "running" ? "go" : "quiet"));
@@ -131,27 +138,42 @@
         }
       }));
     } else if (st === "review") {
-      actions.appendChild(O.btn("Send back", {
-        busyText: "Sending…",
+      /* THE RESCUE FOR A JOB THAT DID NOT GET PASSED ON.
+       *
+       * This branch used to be the manager approvals queue -- Send back, or
+       * Approve & move on, the latter gated on ctx.isManager with an alert for
+       * everybody else. Both are gone as a gate: there is no approval step, and
+       * a job sitting finished in its own list is not waiting on a decision,
+       * it is stuck.
+       *
+       * Two ways out, and neither needs a manager. Finish it properly, which
+       * means working the checklist and signing it like any other hand-off; or
+       * put it back on the bench because it evidently was not done. Send back
+       * stays for a manager, because bouncing somebody's work with a reason is
+       * still a judgement call. */
+      actions.appendChild(O.btn("Finish it properly", {
+        primary: true,
         onClick: function () {
-          var reason = window.prompt("What needs fixing? (optional)") || "";
-          return WFPhase.reject(ctx.t, meta, ctx.member, reason)
+          WFChecklist.open(ctx, card, stage, function () { return ctx.syncCard(card.id); });
+        }
+      }));
+      actions.appendChild(O.btn("Reopen", {
+        busyText: "Reopening…",
+        onClick: function () {
+          return WFPhase.undoComplete(ctx.t, meta)
             .then(function () { return ctx.syncCard(card.id); });
         }
       }));
-      actions.appendChild(O.btn("Approve & move on", {
-        primary: true, busyText: "Approving…",
-        onClick: function () {
-          if (!ctx.isManager) { window.alert("Only managers can approve a phase."); return; }
-          // Approving moves the card; the SDK won't report the new list, so pass
-          // the destination we already know.
-          var target = WFStage.getNextStage(ctx.board.id, card.idList);
-          return WFPhase.approveAndAdvance(ctx.t, meta, ctx.member)
-            .then(function () {
-              return ctx.syncCard(card.id, target ? { idList: target.listId } : null);
-            });
-        }
-      }));
+      if (ctx.isManager) {
+        actions.appendChild(O.btn("Send back", {
+          busyText: "Sending…",
+          onClick: function () {
+            var reason = window.prompt("What needs fixing? (optional)") || "";
+            return WFPhase.reject(ctx.t, meta, ctx.member, reason)
+              .then(function () { return ctx.syncCard(card.id); });
+          }
+        }));
+      }
     } else {
       var mine = w.claimedBy && w.claimedBy.username === ctx.member.username;
       actions.appendChild(O.btn(st === "running" ? "Pause" : "Resume", {
@@ -209,9 +231,12 @@
           O.el("div.wf-h1", { text: "Work board" }),
           search,
           O.el("div.wf-sub.wf-spacer", {
-            text: counts.open + " unclaimed · " + counts.running + " running · " +
-                  (counts.assigned ? counts.assigned + " not started · " : "") +
-                  counts.review + " to approve"
+            // "to approve" described a step that no longer exists. These are
+            // jobs whose hand-off did not complete, and they only appear when
+            // something has gone wrong — so they are named, not counted silently.
+            text: counts.open + " unclaimed · " + counts.running + " running" +
+                  (counts.assigned ? " · " + counts.assigned + " not started" : "") +
+                  (counts.review ? " · " + counts.review + " stuck" : "")
           }));
 
         /* Every work phase gets a column, including the empty ones. Trello does

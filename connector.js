@@ -81,8 +81,12 @@ async function cardDetailBadges(t) {
   if (stage && stage.isWorkPhase) {
     const work = await WFPhase.getActivePhaseWork(t, card).catch(() => null);
     let phaseText = "Not claimed yet";
-    if (work && work.pendingApproval) {
-      phaseText = "Awaiting approval (" + WFPhase.totalMinutes(work) + "m by " + work.claimedBy.fullName + ")";
+    // "Finished, still here" rather than "awaiting approval" -- nobody is
+    // waiting on a manager any more, so a badge that says so sends people
+    // looking for a queue that no longer exists.
+    if (work && WFPhase.isFinished(work)) {
+      phaseText = "Finished, not passed on (" + WFPhase.totalMinutes(work) + "m by " +
+        ((work.claimedBy && work.claimedBy.fullName) || "somebody") + ")";
     } else if (work && work.claimedBy) {
       phaseText = (WFPhase.isRunning(work) ? "In progress" : "Paused") + " -- " +
         work.claimedBy.fullName + " (" + WFPhase.totalMinutes(work) + "m)";
@@ -162,6 +166,29 @@ async function cardButtons(t) {
     })
   });
 
+  /* FINISHING A PHASE HAPPENS IN THE OPS WINDOW, NOT HERE.
+   *
+   * These buttons used to offer "Complete", which called WFPhase.complete and
+   * stopped -- setting a flag, taking the card off the shop floor, and waiting
+   * for a manager to approve it in a queue whose screens are now retired. The
+   * job went nowhere and nothing said so.
+   *
+   * A phase ends with a signed checklist, and the checklist lives in the ops
+   * window. Rebuilding it here would be a third copy of a dialog that already
+   * drifted once across two surfaces, so this opens the real one instead. Start,
+   * pause and resume stay -- they are one-tap facts about right now, and having
+   * them on the card is the whole point of a card button. */
+  const openOps = (label) => ({
+    icon: ICON,
+    text: label,
+    callback: (t2) => t2.modal({
+      title: "WF Ops Dashboard",
+      url: "./popups/ops.html?t=" + Date.now(),
+      fullscreen: true,
+      accentColor: "#14293d"
+    })
+  });
+
   if (!work || !work.claimedBy) {
     buttons.push({
       icon: ICON,
@@ -169,19 +196,17 @@ async function cardButtons(t) {
       callback: async (t2) => { await WFPhase.claimAndStart(t2, card, member); }
     });
     if (managerHere) buttons.push(assignButton("Assign..."));
-  } else if (work.pendingApproval) {
+  } else if (WFPhase.isFinished(work)) {
+    // Finished but still here: either a card completed under the old approval
+    // model, or one whose hand-off failed part way. Undo puts it back on the
+    // bench with the timer running, which is the honest recovery -- the work is
+    // not finished if it is still sitting in this list.
     buttons.push({
       icon: ICON,
-      text: "Undo (" + WFPhase.totalMinutes(work) + "m logged)",
+      text: "Reopen (" + WFPhase.totalMinutes(work) + "m logged)",
       callback: async (t2) => { await WFPhase.undoComplete(t2, card); }
     });
-    if (managerHere) {
-      buttons.push({
-        icon: ICON,
-        text: "Approve & Advance",
-        callback: async (t2) => { await WFPhase.approveAndAdvance(t2, card, member); }
-      });
-    }
+    buttons.push(openOps("Finish it in WF Ops"));
   } else if (!work.segments || !work.segments.length) {
     // Manager-assigned but the worker hasn't tapped Start yet.
     buttons.push({
@@ -196,22 +221,14 @@ async function cardButtons(t) {
       text: "Pause (" + WFPhase.totalMinutes(work) + "m)",
       callback: async (t2) => { await WFPhase.pause(t2, card); }
     });
-    buttons.push({
-      icon: ICON,
-      text: "Complete",
-      callback: async (t2) => { await WFPhase.complete(t2, card); }
-    });
+    buttons.push(openOps("I'm done — check and sign"));
   } else {
     buttons.push({
       icon: ICON,
       text: "Resume (" + WFPhase.totalMinutes(work) + "m)",
       callback: async (t2) => { await WFPhase.resume(t2, card); }
     });
-    buttons.push({
-      icon: ICON,
-      text: "Complete",
-      callback: async (t2) => { await WFPhase.complete(t2, card); }
-    });
+    buttons.push(openOps("I'm done — check and sign"));
   }
   return buttons;
 }

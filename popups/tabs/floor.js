@@ -780,8 +780,19 @@
       .then(function () { return WFRest.getCardDetail(state.ctx.t, st.job.id); })
       .then(function (full) {
         var url = WFCardView.coverFrom(full);
-        // The column may have been repainted while this was in flight.
-        if (!url || !shot.isConnected) return;
+        /* "IS THIS STILL THE LIVE COLUMN", NOT "IS THE TAB MOUNTED".
+         *
+         * The question being asked is whether a repaint has replaced the column
+         * since this fetch started -- and both paint() and repaintColumn detach
+         * the old column from state.host, so containment answers it exactly.
+         *
+         * This was `shot.isConnected`, which asks something subtly different:
+         * whether the node is in the DOCUMENT. In the Power-Up those coincide,
+         * so it worked. Under test the tab is rendered and then mounted, so the
+         * fetch could resolve in the gap and the picture was silently dropped --
+         * a real failure, and the right one to have caught, because the same gap
+         * exists any time the floor is built before it is shown. */
+        if (!url || !state.host || !state.host.contains(shot)) return;
         shot.className = "wf-fl-cover";
         shot.appendChild(O.el("img", { src: url, alt: "", loading: "lazy" }));
       })
@@ -1875,12 +1886,26 @@
       O.el("div", {
         text: rec.signedAt ? new Date(rec.signedAt).toLocaleString() : ""
       })));
-    (rec.rounds && rec.rounds[0] ? rec.rounds[0].items : []).forEach(function (i) {
-      box.appendChild(O.el("div.wf-fl-ck.is-on", null,
-        O.el("span.wf-fl-box", { text: "✓" }),
+    /* THE LATEST ROUND, NOT THE FIRST.
+     *
+     * Rounds accumulate now -- a self-check, then a correction, then the bench
+     * sign-off are three rounds on one record. Reading rounds[0] showed the
+     * items of a round that was NOT the one signed, under a green "QC passed"
+     * header, with every line drawn as a tick regardless of its result. A
+     * failed line rendered as passed is the worst thing this panel could do:
+     * the record would be right and the screen would be lying about it.
+     *
+     * Each line is drawn as what it says it is, for the same reason. */
+    var round = (rec.rounds && rec.rounds.length)
+      ? rec.rounds[rec.rounds.length - 1] : null;
+    ((round && round.items) || []).forEach(function (i) {
+      var passed = i.result !== "fail";
+      box.appendChild(O.el("div.wf-fl-ck" + (passed ? ".is-on" : ""), null,
+        O.el("span.wf-fl-box", { text: passed ? "✓" : "!" }),
         O.el("span", null,
           O.el("div.wf-fl-ck-t", { text: i.text }),
-          i.spec ? O.el("div.wf-fl-ck-s", { text: i.spec }) : null)));
+          i.spec ? O.el("div.wf-fl-ck-s", { text: i.spec }) : null,
+          i.note ? O.el("div.wf-fl-ck-s", { text: i.note }) : null)));
     });
     return box;
   }

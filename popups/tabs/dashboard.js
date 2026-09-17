@@ -33,7 +33,11 @@
   function summarize(ctx, cards, moves) {
     var cfg = ctx.boardCfg;
     var out = {
-      rows: [], byStage: [], inShop: 0, pendingApproval: 0, running: 0,
+      // `stuck` replaces `pendingApproval`. It counts jobs whose phase is
+      // finished but which are still sitting in the list -- under the old model
+      // that meant "waiting for a manager", and now it means a hand-off that
+      // did not complete. Same cards, a name that stays true.
+      rows: [], byStage: [], inShop: 0, stuck: 0, running: 0,
       minutesToday: 0, value: 0, cost: 0, priced: 0,
       forecast: null, unknownAge: 0
     };
@@ -64,7 +68,7 @@
 
       var work = O.activeWork(r.card);
       if (work) {
-        if (work.pendingApproval) out.pendingApproval++;
+        if (WFPhase.isFinished(work)) out.stuck++;
         if (WFPhase.isRunning(work)) {
           out.running++;
           out.minutesToday += WFPhase.totalMinutes(work) || 0;
@@ -393,7 +397,18 @@
             f.late + " already past, " + f.atRisk + " heading that way",
             f.late + f.atRisk > 0),
             ctx, "Won't make it", pick(["late", "at-risk"])),
-          O.stat("Waiting on you", s.pendingApproval, "phases need your sign-off"),
+          /* "Waiting on you · phases need your sign-off" was the approvals
+             queue's tile, and once nothing writes that flag it would have sat
+             at a permanent, reassuring zero -- while the cards it used to count
+             stayed stuck. A finished phase whose card has not moved is a real
+             fault now, not a normal waiting state, so it is named as one and
+             is drillable to the jobs themselves. */
+          drillable(O.stat("Finished, not moved", s.stuck,
+            s.stuck ? "hand-offs that didn't complete" : "every finished phase passed on",
+            s.stuck > 0),
+            ctx, "Finished, not moved", f.worstFirst.filter(function (r) {
+              return WFPhase.isFinished(O.activeWork(r.card));
+            })),
           // Company profitability is a stronger grant than seeing what a job is
           // worth, and it is the figure the standing instruction keeps off
           // other people's screens. Left out entirely rather than shown as a

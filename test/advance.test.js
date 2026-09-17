@@ -205,12 +205,16 @@ test("the job type is read from a source that can actually carry it", async () =
 
 test("a card in a list the board config does not map falls through to the original approve", async () => {
   // Unmapped list -> no opinion about routing -> the untouched approveAndAdvance
-  // runs, and here it refuses because nothing is awaiting approval.
+  // runs, and here it refuses because the phase was never finished.
+  //
+  // The message changed with the approvals teardown: the gate used to read
+  // `pendingApproval` and say "Nothing awaiting approval", which described a
+  // manager step that no longer exists. It now asks WFPhase.isFinished.
   jobTypeReads("CNC only");
   captureMoves(win);
   await assert.rejects(
     () => win.WFPhase.approveAndAdvance(fakeT(), card("not-a-list-on-this-board"), MANAGER),
-    /Nothing awaiting approval/
+    /has not been finished/
   );
 });
 

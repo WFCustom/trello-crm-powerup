@@ -313,7 +313,7 @@
           if (w && w.claimedBy && w.claimedBy.username === me) {
             // assign() puts the assignee in claimedBy with no segments yet, so
             // "handed to me but not started" and "actively mine" both land here.
-            if (w.pendingApproval) waiting.push([card, stage]);
+            if (WFPhase.isFinished(w)) waiting.push([card, stage]);
             else if (O.isAwaitingStart(w)) assigned.push([card, stage]);
             else mine.push([card, stage]);
           } else if (!w || !w.claimedBy) {
@@ -354,18 +354,34 @@
           })));
         }
 
+        /* WAS "WAITING ON A MANAGER", WHICH IS NO LONGER TRUE OF ANYTHING.
+         *
+         * This group used to be where a job went after Complete, to sit until a
+         * manager approved it. Nobody approves anything now, so a job in here is
+         * one whose hand-off did not finish — either completed under the old
+         * model, or a move that failed part way. Telling somebody to wait on a
+         * manager who is never coming is the single worst thing this screen
+         * could say, so it says what is actually true and gives them the two
+         * ways out: sign the checklist, or put it back on the bench. */
         if (waiting.length) {
           out.appendChild(O.el("div.wf-group-h", null,
-            O.el("div.wf-group-t", { text: "Waiting on a manager" }),
+            O.el("div.wf-group-t", { text: "Finished but not passed on" }),
             O.el("span.wf-group-n", { text: String(waiting.length) })));
           out.appendChild(O.el("div.wf-cards", null, waiting.map(function (r) {
             return O.el("div.wf-card.is-review", { style: "grid-template-columns:1.6fr 1fr auto" },
               O.el("div", null,
                 O.el("div.wf-card-t", { text: r[0].name }),
                 O.el("div.wf-card-s", { text: r[1].name + " · " + O.hours(WFPhase.totalMinutes(O.activeWork(r[0]))) + " logged" })),
-              O.el("div", null, O.tag("Sent for sign-off", "warn")),
+              O.el("div", null, O.tag("Stuck here", "warn")),
               O.el("div.wf-actions", null,
-                O.btn("Undo", {
+                O.btn("Sign it off", {
+                  primary: true,
+                  onClick: function () {
+                    var cid = r[0].id;
+                    WFChecklist.open(ctx, r[0], r[1], function () { return ctx.syncCard(cid); });
+                  }
+                }),
+                O.btn("Reopen", {
                   busyText: "…",
                   onClick: function () {
                     var cid = r[0].id;

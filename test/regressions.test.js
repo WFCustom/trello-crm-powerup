@@ -297,6 +297,207 @@ test("nothing finishes a phase by calling complete() and stopping there", () => 
     "lib/qc.js is where complete() is allowed, because it moves the card after");
 });
 
+/* ========================================================= retiring approvals */
+
+/** A window with REST stubbed for writes, plus a card carrying open phase work. */
+function benchEnv(opts) {
+  opts = opts || {};
+  const w = load();
+  const moved = [];
+  const comments = [];
+  w.WFRest = Object.assign({}, w.WFRest, {
+    moveCard: (t, id, list) => { moved.push(list); return Promise.resolve({}); },
+    postComment: (t, id, text) => { comments.push(text); return Promise.resolve({}); },
+    addMemberToCard: () => Promise.resolve({})
+  });
+  const store = {};
+  const t = {
+    get: (scope, vis, key, dflt) => {
+      const v = store[scope + "/" + key];
+      return Promise.resolve(v === undefined ? dflt : v);
+    },
+    set: (scope, vis, key, value) => { store[scope + "/" + key] = value; return Promise.resolve(); },
+    remove: (scope, vis, key) => { delete store[scope + "/" + key]; return Promise.resolve(); }
+  };
+  const boardId = Object.keys(w.WF_CONFIG.boards)[0];
+  const cfg = w.WF_CONFIG.boards[boardId];
+  const stage = (cfg.stages || []).filter((s) => s.isWorkPhase)[0];
+  const meta = { id: "c1", idList: stage.listId, idBoard: boardId };
+  const worker = { id: "w", username: "mike", fullName: "Mike Ross" };
+
+  store["c1/phaseWork"] = {
+    listId: stage.listId,
+    claimedBy: worker,
+    segments: [{ start: new Date(Date.now() - 3600000).toISOString(), end: null }],
+    percentComplete: opts.pct || 40
+  };
+  return { w, t, store, meta, stage, worker, moved, comments };
+}
+
+test("finishing a phase no longer parks it for an approval nobody gives", async () => {
+  /* THE FLAG WAS THE STRANDING MECHANISM. complete() set pendingApproval, which
+   * took the card off the shop floor (isFinished counts it) and put it in a
+   * queue whose only two screens are retired. Nothing was coming. completedAt
+   * carries "this is finished" on its own and reads the same everywhere. */
+  const env = benchEnv();
+  await env.w.WFPhase.complete(env.t, env.meta, { silent: true });
+
+  const work = env.store["c1/phaseWork"];
+  assert.ok(work.completedAt, "the fact is recorded");
+  assert.ok(!work.pendingApproval, "the approval flag is not written any more");
+  assert.equal(work.percentComplete, 100);
+  assert.ok(env.w.WFPhase.isFinished(work), "and every reader still sees it as finished");
+});
+
+test("a card stranded under the old model still reads as finished", () => {
+  // The read-only bridge. Delete this clause only when the board has no cards
+  // left carrying the flag -- until then removing it hides them completely.
+  const P = win.WFPhase;
+  assert.equal(P.isFinished({ pendingApproval: true }), true);
+  assert.equal(P.isFinished({ completedAt: "2026-09-01T00:00:00.000Z" }), true);
+  assert.equal(P.isFinished({ segments: [] }), false);
+  assert.equal(P.isFinished(null), false);
+  // The shop floor must give the same answer as the state machine, always.
+  assert.equal(win.WFTables.isFinished({ pendingApproval: true }), true);
+  assert.equal(win.WFTables.isFinished({ completedAt: "x" }), true);
+  assert.equal(win.WFTables.isFinished({}), false);
+});
+
+test("only lib/qc.js finishes a phase, and the card surfaces no longer can", () => {
+  /* connector.js and popups/card-back.js each had a Complete button calling
+   * WFPhase.complete() and stopping. Those two were the last paths that could
+   * strand a job, and neither offers a checklist, so neither can legitimately
+   * finish a phase. */
+  ["connector.js", "popups/card-back.js", "popups/tabs/myjobs.js",
+   "popups/tabs/workboard.js", "popups/checklist.js"].forEach((file) => {
+    assert.equal((code(file).match(/WFPhase\.complete\s*\(/g) || []).length, 0,
+      file + " must not finish a phase -- only lib/qc.js does, and it advances");
+  });
+  // And nothing outside phase.js/qc.js decides "finished" by reading the flag.
+  ["popups/ops.js", "popups/tabs/dashboard.js", "popups/tabs/myjobs.js",
+   "popups/tabs/workboard.js", "popups/tabs/floor.js", "lib/tables.js",
+   "connector.js", "popups/card-back.js"].forEach((file) => {
+    assert.ok(!/\bpendingApproval\b/.test(code(file)),
+      file + " asks WFPhase.isFinished instead of reading pendingApproval");
+  });
+});
+
+/* ================================================== one QC record per phase */
+
+test("signing at the bench after a self-check adds a round, it does not erase one", async () => {
+  /* THE COLLISION. Both paths wrote the record WHOLE to one key, and
+   * activeRecord discriminated on listId alone -- so whichever ran second
+   * silently destroyed the first, taking its rounds, its signature and its
+   * signer. The fault path hangs off these rounds, so this had to be fixed
+   * before any of it could be built on. */
+  const env = benchEnv();
+  const QC = env.w.WFQC;
+  const peer = { id: "p", username: "kevinmoss", fullName: "Kevin Moss" };
+
+  await QC.submitSelfCheck(env.t, env.meta, env.stage.name, env.worker,
+    [{ text: "Work is complete and correct", result: "fail", note: "seam needs grinding" }]);
+
+  const afterSelf = env.store["c1/qcRecord"];
+  assert.equal(afterSelf.rounds.length, 1);
+  assert.equal(QC.modeOf(afterSelf), "self");
+
+  const items = [{ text: "Frame is square", spec: "diagonals within 1/8\"" }];
+  await QC.signOff(env.t, env.meta, {
+    phase: env.stage.name, items: items, checked: { 0: true },
+    signature: "Kevin Moss", signedBy: peer, worker: env.worker
+  });
+
+  const after = env.store["c1/qcRecord"];
+  assert.equal(after.rounds.length, 2, "the self-check's round survived");
+  assert.equal(after.rounds[0].items[0].note, "seam needs grinding",
+    "including what was written on it");
+  assert.equal(after.rounds[1].checkedBy.username, "kevinmoss");
+  assert.equal(QC.modeOf(after), "floor");
+});
+
+test("a self-check is never mistaken for a bench sign-off", async () => {
+  /* floorSignOff used to filter on `signedAt` being present, which excluded the
+   * other kinds only by accident. Complete reads this to decide whether a job
+   * may pass; getting it wrong either blocks a signed job or ships an unsigned
+   * one. */
+  const env = benchEnv();
+  const QC = env.w.WFQC;
+  await QC.submitSelfCheck(env.t, env.meta, env.stage.name, env.worker,
+    [{ text: "Work is complete and correct", result: "fail", note: "" }]);
+
+  const card = { idList: env.meta.idList, qcRecord: env.store["c1/qcRecord"] };
+  assert.equal(QC.floorSignOff(card), null, "a self-check is not a bench sign-off");
+  assert.ok(QC.activeRecord(card, "self"), "but it is findable as what it is");
+  assert.equal(QC.activeRecord(card, "floor"), null);
+});
+
+test("a re-check clears the old signature instead of wearing it", async () => {
+  /* Carrying a record over keeps its rounds -- that is the fix -- but it was
+   * also keeping `signature`, `signedAt` and `signedBy` from an earlier BENCH
+   * sign-off while stamping mode "self" over the top. The result was a record
+   * claiming to be a self-check while carrying somebody else's signature, and
+   * because floorSignOff asks for mode "floor", a genuinely signed job came
+   * back unsigned: Complete lost its tick and passSigned refused the card.
+   *
+   * The signature belongs to the round, and the record only ever describes the
+   * latest one. */
+  const env = benchEnv();
+  const QC = env.w.WFQC;
+  const peer = { id: "p", username: "kevinmoss", fullName: "Kevin Moss" };
+
+  await QC.signOff(env.t, env.meta, {
+    phase: env.stage.name,
+    items: [{ text: "Frame is square", spec: "within 1/8\"" }],
+    checked: { 0: true }, signature: "Kevin Moss", signedBy: peer, worker: env.worker
+  });
+  const signed = env.store["c1/qcRecord"];
+  assert.ok(QC.floorSignOff({ idList: env.meta.idList, qcRecord: signed }));
+  assert.equal(signed.rounds[0].signature, "Kevin Moss",
+    "the round carries its own signature, so looking back at it still works");
+
+  // Somebody re-checks the same phase and finds something.
+  await QC.submitSelfCheck(env.t, env.meta, env.stage.name, env.worker,
+    [{ text: "Frame is square", result: "fail", note: "twisted 3mm" }]);
+
+  const after = env.store["c1/qcRecord"];
+  assert.equal(after.rounds.length, 2, "both rounds are on the record");
+  assert.equal(after.rounds[0].signature, "Kevin Moss", "the bench round is intact");
+  assert.ok(!after.signature, "but the record no longer claims to be signed");
+  assert.ok(!after.signedAt);
+  assert.equal(QC.floorSignOff({ idList: env.meta.idList, qcRecord: after }), null,
+    "and a job somebody just failed cannot pass as signed");
+});
+
+test("the signed stamp reads the round that was signed, not the first one", () => {
+  /* popups/tabs/floor.js drew rounds[0] under a green "QC passed" header with
+   * every line forced to a tick. Once rounds accumulate, rounds[0] is usually
+   * NOT the signed one -- so a failed line from an earlier round rendered as
+   * passed. The record would be right and the screen would be lying about it. */
+  const src = code("popups/tabs/floor.js");
+  assert.ok(!/rec\.rounds\[0\]/.test(src),
+    "the stamp must not index the first round");
+  assert.ok(/rounds\[rec\.rounds\.length\s*-\s*1\]/.test(src),
+    "it reads the latest round");
+  assert.ok(/i\.result\s*!==\s*"fail"/.test(src),
+    "and draws each line as what it says it is, not always as a pass");
+});
+
+test("a record belonging to an earlier phase is replaced, not accumulated", async () => {
+  // Rounds accumulate within a phase. Across phases they must not: the card has
+  // moved on and this is a different check, so carrying the old rounds forward
+  // would make the new phase look already inspected.
+  const env = benchEnv();
+  const QC = env.w.WFQC;
+  env.store["c1/qcRecord"] = {
+    listId: "some-other-list", phase: "Earlier", mode: "floor", status: "passed",
+    rounds: [{ n: 1 }, { n: 2 }]
+  };
+  await QC.submitSelfCheck(env.t, env.meta, env.stage.name, env.worker,
+    [{ text: "Work is complete and correct", result: "fail", note: "" }]);
+  assert.equal(env.store["c1/qcRecord"].rounds.length, 1);
+  assert.equal(env.store["c1/qcRecord"].listId, env.meta.idList);
+});
+
 test("a peer-checked phase records who vouched, not just who ticked", async () => {
   /* The peer distinction used to live in a queue that nothing services any
    * more. It survives as the second name on the record, which is the only part
