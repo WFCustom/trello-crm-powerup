@@ -968,6 +968,171 @@ test("check all ticks the lot, and clear all puts it back", async () => {
   assert.equal($(col, ".wf-fl-ck.is-on").length, 0);
 });
 
+/* ===================================================== the fault path, on screen
+ *
+ * The whole third state lived in lib/qc.js coverage and nothing rendered it.
+ * Every assertion below is about the screen a welder is actually looking at:
+ * the box cycles to a third state, that state demands a sentence, and nothing
+ * can be signed while it is showing. A fault path whose UI silently stops
+ * offering the fail state is a fault path that does not exist, and the library
+ * tests would all still be green.
+ */
+
+test("a checklist box cycles to failed, and a failed line demands a sentence", async () => {
+  const env = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  const node = await render(env, 1280);
+  $(node, ".wf-fl-ic")[1].dispatchEvent(new env.win.Event("click"));
+  await new Promise((r) => setTimeout(r, 0));
+
+  const click = (el) => el.dispatchEvent(new env.win.Event("click"));
+  const col = () => $(node, '[data-station="s1"]')[0];
+
+  // untouched -> pass
+  click($(col(), ".wf-fl-ck .wf-fl-box")[0]);
+  assert.equal($(col(), ".wf-fl-ck.is-on").length, 1, "first tap passes the line");
+  assert.equal($(col(), ".wf-fl-ck.is-bad").length, 0);
+
+  // pass -> fail. THE STATE THE FEATURE EXISTS FOR.
+  click($(col(), ".wf-fl-ck .wf-fl-box")[0]);
+  assert.equal($(col(), ".wf-fl-ck.is-bad").length, 1, "second tap marks it wrong");
+  assert.equal($(col(), ".wf-fl-ck.is-on").length, 0, "and it is no longer a pass");
+
+  const note = $(col(), ".wf-fl-ck.is-bad input.wf-fl-input")[0];
+  assert.ok(note, "failing a line opens a box asking what is wrong");
+  assert.match(note.placeholder, /what's wrong/i);
+
+  // A fault nobody described teaches nobody anything, so it cannot be recorded.
+  const btn = () => $(col(), "[data-fault-btn]")[0];
+  assert.ok(btn(), "the way out appears as soon as a line is failed");
+  assert.equal(btn().disabled, true, "but not until the fault has been described");
+
+  note.value = "twisted 3mm across the diagonal";
+  note.dispatchEvent(new env.win.Event("input"));
+  assert.equal(btn().disabled, false, "described, so it can be recorded");
+  assert.equal(env.written.length, 0, "and none of this wrote anything yet");
+
+  // fail -> untouched, and the question goes away with it.
+  click($(col(), ".wf-fl-ck .wf-fl-box")[0]);
+  assert.equal($(col(), ".wf-fl-ck.is-bad").length, 0, "third tap clears it");
+  assert.equal($(col(), ".wf-fl-ck.is-on").length, 0);
+  assert.equal($(col(), "[data-fault-btn]").length, 0);
+});
+
+test("nothing signs while a line is marked wrong, however complete the rest is", async () => {
+  /* THE GATE, ISOLATED SO IT CAN ONLY PASS FOR ITS OWN REASON.
+   *
+   * Asserting "the sign button is disabled" on a half-worked list proves
+   * nothing -- it was disabled before the fault path existed, because not every
+   * line was ticked. So this drives the checklist into the one state where the
+   * failed map is the ONLY thing left in the way: every box ticked (Check all
+   * ticks the failed line too), a name typed, a signer chosen. Delete the
+   * countFailed guard in canSignOff and this is the test that notices. */
+  const env = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  const node = await render(env, 1280);
+  $(node, ".wf-fl-ic")[1].dispatchEvent(new env.win.Event("click"));
+  await new Promise((r) => setTimeout(r, 0));
+
+  const col = () => $(node, '[data-station="s1"]')[0];
+  const click = (el) => el.dispatchEvent(new env.win.Event("click"));
+
+  click($(col(), ".wf-fl-ck .wf-fl-box")[0]);   // pass
+  click($(col(), ".wf-fl-ck .wf-fl-box")[0]);   // fail
+  assert.equal($(col(), ".wf-fl-ck.is-bad").length, 1);
+
+  click($(col(), ".wf-fl-allrow button")[0]);   // "Check all"
+  assert.equal($(col(), ".wf-fl-ck.is-bad").length, 1,
+    "a bulk tick does not quietly un-say that something is wrong");
+
+  const sig = $(col(), ".wf-fl-panel input.wf-fl-input")[0];
+  sig.value = "Kevin Moss";
+  sig.dispatchEvent(new env.win.Event("input"));
+  const who = $(col(), ".wf-fl-sel")[0];
+  who.value = "kevinmoss";
+  who.dispatchEvent(new env.win.Event("change"));
+
+  const signBtn = $(col(), ".wf-fl-panel button.wf-fl-done")[0];
+  assert.equal(signBtn.disabled, true,
+    "everything ticked and signed, and it still will not go: a line is wrong");
+  assert.match(textOf(col()), /marked wrong/i, "and the hint says that is why");
+  assert.equal(env.written.length, 0);
+});
+
+test("recording the fault writes the note against the round and moves nothing", async () => {
+  const env = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("B", "LA", { claimed: KEV, running: true })]
+  });
+  const node = await render(env, 1280);
+  $(node, ".wf-fl-ic")[1].dispatchEvent(new env.win.Event("click"));
+  await new Promise((r) => setTimeout(r, 0));
+
+  const col = () => $(node, '[data-station="s1"]')[0];
+  const click = (el) => el.dispatchEvent(new env.win.Event("click"));
+  // Re-queried between taps: each tap repaints the column, so the node from
+  // before the repaint is detached and clicking it again replays the OLD state.
+  click($(col(), ".wf-fl-ck .wf-fl-box")[0]);
+  click($(col(), ".wf-fl-ck .wf-fl-box")[0]);
+
+  const note = $(col(), ".wf-fl-ck.is-bad input.wf-fl-input")[0];
+  note.value = "twisted 3mm across the diagonal";
+  note.dispatchEvent(new env.win.Event("input"));
+  click($(col(), "[data-fault-btn]")[0]);
+  await new Promise((r) => setTimeout(r, 0));
+
+  const rec = env.store.qcRecord;
+  assert.ok(rec, "the fault landed on the card");
+  assert.equal(rec.status, "awaiting_correction");
+  assert.equal(rec.rounds[0].results[0], "fail");
+  assert.equal(rec.rounds[0].notes[0], "twisted 3mm across the diagonal");
+  assert.ok(!rec.signature, "a round that found a fault is not a signature");
+  assert.ok(rec.rounds[0].results.slice(1).every((r) => r === "pass"),
+    "and every other line went in as it was left");
+});
+
+test("an open fault takes over the station: no blank checklist, no Complete", async () => {
+  /* A job with something wrong recorded against it must not be offered a fresh
+   * list to tick -- that is how a fault gets quietly checked over the top of.
+   * And Complete has to take you to what is in the way rather than refuse. */
+  const card = job("B", "LA", { claimed: KEV, running: true });
+  card.qcRecord = {
+    listId: "LA", phase: "Assemble Legacy", mode: "floor", status: "awaiting_correction",
+    template: [{ text: "Frame is square", spec: "diagonals within 1/8\"" }],
+    // foundBy is what separates a fault somebody raised from an unticked
+    // self-check line, which is also stored as "fail". Without it this round
+    // is not a fault round and the station is right to show a clean list.
+    rounds: [{ n: 1, results: ["fail"], notes: { 0: "twisted 3mm across the diagonal" },
+               foundBy: { id: "k", username: "kevinmoss", fullName: "Kevin Moss" },
+               checkedAt: new Date().toISOString() }]
+  };
+  const env = boot({ role: "worker", saved: ONE_STATION, cards: [card] });
+  const node = await render(env, 1280);
+  let col = $(node, '[data-station="s1"]')[0];
+
+  // Visible from ten feet away, before the screen is even opened.
+  assert.equal($(col, ".wf-fl-ic.is-bad").length, 1, "the QC icon goes red");
+  const done = $(col, "button.wf-fl-done")[0];
+  assert.match(textOf(done), /! 1 fault/, "Complete becomes the fault count");
+  assert.ok(done.classList.contains("is-bad"));
+
+  // And pressing it opens the fault rather than completing anything.
+  done.dispatchEvent(new env.win.Event("click"));
+  await new Promise((r) => setTimeout(r, 0));
+  col = $(node, '[data-station="s1"]')[0];
+  assert.match(textOf(col), /1 fault is open on this job/);
+  assert.match(textOf(col), /twisted 3mm across the diagonal/, "with what was wrong");
+  assert.equal($(col, ".wf-fl-ck .wf-fl-box").length, 0,
+    "and no blank checklist to tick over the top of it");
+  assert.ok($(col, 'input[placeholder="What did you do about it?"]')[0],
+    "the only thing on offer is an answer");
+  assert.equal(env.written.length, 0, "nothing was written by looking");
+});
+
 test("only a manager gets the edit-this-list control", async () => {
   const mk = (role) => boot({
     role, saved: ONE_STATION,

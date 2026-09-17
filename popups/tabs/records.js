@@ -346,19 +346,59 @@
     }
 
     wrap.appendChild(O.el("div.wf-stats", null,
-      O.stat("Checks", s.rounds, "rounds recorded"),
+      // Every round recorded, including self-checks nobody has finished. The
+      // pass rate beside it is over the judged rounds only, so the count says
+      // how many are still in progress rather than leaving the two numbers
+      // looking like they disagree.
+      O.stat("Checks", s.rounds, s.unfinished
+        ? "rounds recorded · " + s.unfinished + " still in progress"
+        : "rounds recorded"),
       O.stat("Passed first time", s.passRate === null ? "—" : s.passRate + "%", ""),
-      O.stat("Sent back", s.failed, "rounds with a failed line", s.failed > 0)));
+      O.stat("Sent back", s.failed, "rounds with a failed line", s.failed > 0),
+      // Still open, right now, somewhere on a bench. Distinct from "sent back",
+      // which counts rounds historically -- this one is a to-do.
+      O.stat("Faults still open", s.openFaults,
+        s.openFaults ? "jobs waiting on an answer" : "every fault answered",
+        s.openFaults > 0)));
 
     if (s.topFailures.length) {
+      /* THIS IS THE TRAINING MATERIAL, SO IT SHOWS THE ANSWERS.
+       *
+       * A tally alone says "dimensions match the measure sheet, 11 times" —
+       * which tells you there is a problem and nothing whatever about it. What
+       * people wrote when they fixed it is the lesson: eleven different answers
+       * means eleven different causes and the line is worded too vaguely;
+       * eleven identical answers is one process to change tomorrow.
+       *
+       * The phase is named for the same reason. A line failing everywhere is a
+       * wording problem; a line failing only at one bench is a bench problem,
+       * and those want opposite responses. */
       var repeat = O.panel("What fails most",
         "the same line failing repeatedly is a process to change, not a bad day");
-      repeat.body(O.el("table.wf-rec-t", null,
-        O.el("tbody", null, s.topFailures.map(function (f) {
-          return O.el("tr", null,
-            O.el("td", { text: f.text }),
-            O.el("td.n", { text: f.n + (f.n === 1 ? " time" : " times") }));
-        }))));
+      repeat.body(O.el("div.wf-list", null, s.topFailures.map(function (f) {
+        var row = O.el("div", { style: "padding:11px 0;border-bottom:1px solid var(--wf-band)" },
+          O.el("div", { style: "display:flex;gap:10px;align-items:baseline" },
+            O.el("div.wf-job", { text: f.text, style: "flex:1" }),
+            O.el("div.n", { text: f.n + (f.n === 1 ? " time" : " times") })));
+        if (f.worstPhase) {
+          row.appendChild(O.el("div.wf-jobsub", {
+            text: "most often in " + f.worstPhase
+          }));
+        }
+        if (f.fixes.length) {
+          row.appendChild(O.el("div.muted", {
+            style: "font-size:12.5px;margin-top:6px",
+            text: "What was done: " + f.fixes.slice(0, 3).join(" · ") +
+                  (f.fixes.length > 3 ? " …" : "")
+          }));
+        } else if (f.notes.length) {
+          row.appendChild(O.el("div.muted", {
+            style: "font-size:12.5px;margin-top:6px",
+            text: "Reported as: " + f.notes.slice(0, 3).join(" · ")
+          }));
+        }
+        return row;
+      })));
       wrap.appendChild(repeat);
     }
 
@@ -369,12 +409,26 @@
         O.el("div", null,
           O.el("div.wf-job", { text: e.job }),
           O.el("div.wf-jobsub", { text: meta })),
+        /* AN UNFINISHED CHECK IS NOT REPORTED AS A FAILED ONE.
+         *
+         * A self-check stores unticked lines as "fail", meaning "not finished".
+         * The summary above now sets those rounds aside — but this list was
+         * still painting them red as "round 1 failed" and naming the unticked
+         * lines as though somebody had rejected them. One panel saying a check
+         * was set aside above another calling it a failure is the kind of
+         * contradiction that makes people stop trusting the whole screen. */
         O.el("div", { style: "font-size:13px;color:var(--wf-muted)",
-          text: e.failed.length
-            ? e.failed.map(function (f) { return f.text; }).join("; ")
-            : "all " + e.items + " lines checked" }),
-        O.el("div", null, e.passed ? O.tag("passed", "go")
-                                   : O.tag("round " + e.round + " failed", "late")));
+          text: e.unfinished
+            ? (e.items - e.failed.length) + " of " + e.items + " lines ticked so far"
+            : e.failed.length
+              ? e.failed.map(function (f) {
+                  return f.text + (f.fixed ? " → " + f.fix : "");
+                }).join("; ")
+              : "all " + e.items + " lines checked" }),
+        O.el("div", null,
+          e.unfinished ? O.tag("in progress", "quiet")
+            : e.passed ? O.tag("passed", "go")
+            : O.tag("round " + e.round + " failed", "late")));
       return row;
     })));
     wrap.appendChild(recent);

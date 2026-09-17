@@ -279,6 +279,14 @@
       ".wf-fl-box{flex:0 0 auto;width:20px;height:20px;border-radius:6px;border:2px solid var(--p-muted);",
       "display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;margin-top:1px}",
       ".wf-fl-ck.is-on .wf-fl-box{background:var(--p-ok);border-color:var(--p-ok)}",
+      /* A failed line has to read as failed from across a shop, not as an
+         unticked one. Red box, red edge, and the row keeps its full height
+         because the "what's wrong" field lives inside it. */
+      ".wf-fl-ck.is-bad{border-color:var(--p-warn);background:#fdf0ec;flex-direction:column;align-items:stretch}",
+      ".wf-fl-ck.is-bad .wf-fl-box{background:var(--p-warn);border-color:var(--p-warn);color:#fff}",
+      ".wf-fl-box{cursor:pointer;font-family:inherit;padding:0;font-weight:700}",
+      ".wf-fl-btn.is-bad{background:var(--p-warn);border-color:var(--p-warn);color:#fff}",
+      ".wf-fl-ic.is-bad{background:var(--p-warn);border-color:var(--p-warn);color:#fff}",
       ".wf-fl-ck-t{font-size:13px;font-weight:700;color:var(--p-ink);line-height:1.3}",
       ".wf-fl-ck-s{font-size:11px;color:var(--p-muted);margin-top:2px;line-height:1.35}",
       ".wf-fl-stamp{background:var(--p-ok);color:#fff;border-radius:14px;padding:12px 14px;",
@@ -668,9 +676,20 @@
     assign.appendChild(icon("person-plus"));
     row.appendChild(assign);
 
-    var qc = O.el("button.wf-fl-ic" + (signed ? ".is-passed" : ""), {
+    // A fault outranks a pass on this icon. Somebody glancing at the board from
+    // ten feet away needs to see that this job has something wrong with it
+    // before they see anything else about it.
+    // NOT named `open`: the "open this card" button below already owns that
+    // name in this scope, and a second `var open` here is a redeclaration that
+    // works only because of the order the two happen to be written in.
+    var faults = st.job ? WFQC.openFaults(st.job) : [];
+    var qc = O.el("button.wf-fl-ic" +
+      (faults.length ? ".is-bad" : signed ? ".is-passed" : ""), {
       type: "button",
-      title: signed
+      title: faults.length
+        ? faults.length + (faults.length === 1 ? " fault" : " faults") + " open · " +
+          (faults[0].note || faults[0].text)
+        : signed
         ? "QC passed · " + ((signed.signedBy && signed.signedBy.fullName) || signed.signature)
         : "QC checklist · sign off",
       "aria-label": "QC checklist",
@@ -933,11 +952,25 @@
       }
     }));
 
-    row.appendChild(O.el("button.wf-fl-btn.wf-fl-done" + (signed ? ".is-on" : ""), {
+    // A job with an open fault cannot be completed, and the button says which
+    // fault rather than just refusing. Complete on an unsigned job opens the
+    // checklist; on a faulted one it opens the faults, which is the same rule:
+    // the button takes you to whatever is actually in the way.
+    var faults = WFQC.openFaults(st.job);
+    row.appendChild(O.el("button.wf-fl-btn.wf-fl-done" +
+      (signed ? ".is-on" : "") + (faults.length ? ".is-bad" : ""), {
       type: "button",
-      text: (signed ? "✓ " : "") + "Complete",
-      title: signed ? "QC signed — pass it to the next phase" : "Opens the QC checklist first",
-      onClick: function () { askComplete(st); }
+      text: faults.length
+        ? "! " + faults.length + (faults.length === 1 ? " fault" : " faults")
+        : (signed ? "✓ " : "") + "Complete",
+      title: faults.length
+        ? "Something is wrong with this job — say what was done about it first"
+        : signed ? "QC signed — pass it to the next phase"
+        : "Opens the QC checklist first",
+      onClick: function () {
+        if (faults.length) return setView(st, "qc");
+        askComplete(st);
+      }
     }));
     return row;
   }
@@ -1496,6 +1529,18 @@
       return box;
     }
 
+    /* AN OPEN FAULT IS THE ONLY THING THIS SCREEN WILL TALK ABOUT.
+     *
+     * Ahead of the signed stamp and ahead of a fresh checklist, because a job
+     * with something wrong recorded against it should not offer a blank list to
+     * tick — that is how a fault gets quietly checked over the top of. What is
+     * on the bench is the fault, until somebody says what they did about it. */
+    var faults = WFQC.openFaults(st.job);
+    if (faults.length) {
+      box.appendChild(faultsView(st, faults));
+      return box;
+    }
+
     var done = WFQC.floorSignOff(st.job);
     if (done) {
       box.appendChild(signedStamp(st, done));
@@ -1537,6 +1582,17 @@
       return box;
     }
 
+    /* The two fault maps are initialised HERE, before anything reads them.
+     *
+     * They used to be created further down, after the progress counter, the
+     * empty-list early return and checkAllRow had all already run -- every one
+     * of which is a read of state that did not exist yet on the first paint of
+     * a freshly loaded checklist. Nothing crashed only because each of those
+     * readers happened to guard, which is a property of today's code rather
+     * than of the state, and the next reader added below would not have. */
+    q.faults = q.faults || {};
+    q.notes = q.notes || {};
+
     if (q.pending) {
       box.appendChild(O.el("div.wf-fl-amber", {
         text: "This job can't pass until the checklist is worked and signed."
@@ -1555,12 +1611,24 @@
         : "No saved checklist — working the shipped draft"
     }));
 
+    /* A LINE MARKED WRONG IS NOT A LINE CHECKED OFF.
+     *
+     * This counted q.checked alone, so pressing Check all with a line already
+     * failed read "10 of 10 checked · 100%" above a red row -- a progress bar
+     * claiming the list was clean while the screen said it was not. The failed
+     * lines are counted separately and named, because the number of things
+     * wrong is the more useful figure of the two anyway. */
     var total = q.items.length;
-    var checked = q.items.filter(function (_, i) { return q.checked[i]; }).length;
+    var bad = q.items.filter(function (_, i) { return q.faults[i]; }).length;
+    var checked = q.items.filter(function (_, i) {
+      return q.checked[i] && !q.faults[i];
+    }).length;
+    var pct = Math.round((checked / Math.max(1, total)) * 100);
     var head = O.el("div.wf-fl-pct", null,
-      O.el("span", { text: checked + " of " + total + " checked" }),
-      O.el("span", { text: Math.round((checked / Math.max(1, total)) * 100) + "%" }));
-    var fill = O.el("i", { style: "width:" + Math.round((checked / Math.max(1, total)) * 100) + "%" });
+      O.el("span", { text: checked + " of " + total + " checked" +
+        (bad ? " · " + bad + (bad === 1 ? " marked wrong" : " marked wrong") : "") }),
+      O.el("span", { text: pct + "%" }));
+    var fill = O.el("i", { style: "width:" + pct + "%" });
     box.appendChild(head);
     box.appendChild(O.el("div.wf-fl-bar", null, fill));
 
@@ -1594,27 +1662,199 @@
       return box;
     }
 
-    box.appendChild(checkAllRow(st, q, checked, total));
+    box.appendChild(checkAllRow(st, q, checked, total, bad));
 
+    /* THREE STATES, AND THE THIRD ONE IS THE POINT.
+     *
+     * The box cycles untouched → pass → fail → untouched. Before this a line
+     * could only be ticked or not, so somebody looking at a twisted frame had
+     * two options: walk away, or tick it anyway. A gate with no way to say no
+     * teaches people to say yes, and then the signatures stop meaning anything.
+     *
+     * Failing a line opens a box asking what is wrong, and that box is required
+     * — a fault nobody described teaches nobody anything, which is the entire
+     * reason for collecting them.
+     *
+     * q.faults and q.notes are initialised above, before the first read. */
     q.items.forEach(function (item, i) {
-      var on = !!q.checked[i];
-      var row = O.el("button.wf-fl-ck" + (on ? ".is-on" : ""), {
+      var bad = !!q.faults[i];
+      var on = !bad && !!q.checked[i];
+      var row = O.el("div.wf-fl-ck" + (on ? ".is-on" : "") + (bad ? ".is-bad" : ""));
+
+      row.appendChild(O.el("button.wf-fl-box" + (bad ? ".is-bad" : ""), {
         type: "button",
-        style: "width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer",
+        title: bad ? "Marked wrong — tap to clear"
+          : on ? "Passed — tap to mark it wrong" : "Tap to pass",
+        text: bad ? "!" : on ? "✓" : "",
         onClick: function () {
-          q.checked[i] = !q.checked[i];
+          if (bad) { q.faults[i] = false; q.checked[i] = false; }
+          else if (on) { q.checked[i] = false; q.faults[i] = true; }
+          else { q.checked[i] = true; }
           repaintColumn(st);
         }
-      },
-        O.el("span.wf-fl-box", { text: on ? "✓" : "" }),
-        O.el("span", null,
-          O.el("div.wf-fl-ck-t", { text: item.text }),
-          item.spec ? O.el("div.wf-fl-ck-s", { text: item.spec }) : null));
+      }));
+
+      var body = O.el("span", null,
+        O.el("div.wf-fl-ck-t", { text: item.text }),
+        item.spec ? O.el("div.wf-fl-ck-s", { text: item.spec }) : null);
+
+      if (bad) {
+        var note = O.el("input.wf-fl-input", {
+          type: "text", value: q.notes[i] || "",
+          placeholder: "What's wrong with it?",
+          style: "margin-top:7px"
+        });
+        // Kept on input rather than on blur: a repaint from another station
+        // must not be able to swallow what somebody was halfway through typing.
+        note.addEventListener("input", function () {
+          q.notes[i] = note.value;
+          refreshFaultState(st, q);
+        });
+        body.appendChild(note);
+      }
+
+      row.appendChild(body);
       box.appendChild(row);
     });
 
+    box.appendChild(faultBlock(st, q));
     box.appendChild(signBlock(st, q));
     return box;
+  }
+
+  /**
+   * What is wrong, and a box for what was done about it.
+   *
+   * The two sit together on purpose. "Twisted 3mm across the diagonal" and
+   * "reheated and re-clamped, re-measured at 1/16" are one fact split in two,
+   * and either half on its own teaches nobody anything a year later — which is
+   * the only reason any of this is being collected.
+   *
+   * Answering every fault does NOT pass the job. It puts the checklist back,
+   * because the second look is what the fault earned.
+   */
+  function faultsView(st, faults) {
+    var box = O.el("div.wf-fl-vbody");
+    box.appendChild(O.el("div.wf-fl-amber", {
+      text: faults.length + (faults.length === 1 ? " fault is open on this job."
+        : " faults are open on this job.") +
+        " It stays on this bench until each one has an answer."
+    }));
+
+    faults.forEach(function (f) {
+      var panel = O.el("div.wf-fl-panel", { style: "margin-top:10px" });
+      panel.appendChild(O.el("div.wf-fl-k", { text: "What's wrong" }));
+      panel.appendChild(O.el("div.wf-fl-ck-t", { text: f.text }));
+      if (f.spec) panel.appendChild(O.el("div.wf-fl-ck-s", { text: f.spec }));
+      panel.appendChild(O.el("div", {
+        style: "font-size:13px;color:var(--p-warn);font-weight:700;margin-top:6px",
+        text: f.note || "(nothing written)"
+      }));
+
+      var what = O.el("input.wf-fl-input", {
+        type: "text", placeholder: "What did you do about it?",
+        style: "margin-top:10px"
+      });
+      var save = O.el("button.wf-fl-btn.wf-fl-small", {
+        type: "button", text: "Save the fix",
+        onClick: function () {
+          var text = String(what.value || "").trim();
+          if (!text) {
+            return O.dialog({
+              title: "Say what was done",
+              note: "A fault with no answer is the same as no record at all — " +
+                    "in a year this is what tells somebody how it was put right.",
+              buttons: []
+            });
+          }
+          write(st, function () {
+            return WFQC.resolveFault(state.ctx.t, st.job, f.index, text, state.ctx.member);
+          }, { keepView: "qc" });
+        }
+      });
+
+      panel.appendChild(O.el("div.wf-fl-k", { style: "margin-top:10px", text: "What was done" }));
+      panel.appendChild(what);
+      panel.appendChild(O.el("div.wf-fl-arow", null, save));
+      box.appendChild(panel);
+    });
+
+    return box;
+  }
+
+  /**
+   * The way out when something is wrong.
+   *
+   * Appears only once a line is failed, and refuses until every failure has
+   * been described. The wording is deliberate about what happens next: the job
+   * does not go anywhere. It stays on this bench, with the person who can fix
+   * it, because moving it would hand somebody else a fault with no context and
+   * take the work away from whoever holds the information about it.
+   */
+  function faultBlock(st, q) {
+    var box = O.el("div", { style: "margin-top:12px" });
+    var bad = q.items.filter(function (_, i) { return q.faults && q.faults[i]; });
+    if (!bad.length) return box;
+
+    var missing = q.items.filter(function (_, i) {
+      return q.faults[i] && !String(q.notes[i] || "").trim();
+    }).length;
+
+    var btn = O.el("button.wf-fl-btn", {
+      type: "button",
+      text: "Record the fault" + (bad.length > 1 ? "s" : ""),
+      disabled: !!missing,
+      style: missing ? "opacity:.4;cursor:default" : "",
+      onClick: function () { recordFaults(st, q); }
+    });
+    btn.setAttribute("data-fault-btn", "1");
+
+    box.appendChild(O.el("div.wf-fl-amber", {
+      text: missing
+        ? "Say what's wrong with " + (missing === 1 ? "the failed item" :
+            "all " + missing + " failed items") + " before recording."
+        : bad.length + (bad.length === 1 ? " fault" : " faults") +
+          " ready to record. The job stays on this bench — nothing moves."
+    }));
+    box.appendChild(O.el("div.wf-fl-run", null, btn));
+    return box;
+  }
+
+  /** Re-enable the buttons as somebody types, without redrawing the field. */
+  function refreshFaultState(st, q) {
+    var col = state.host && state.host.querySelector('[data-station="' + st.station.id + '"]');
+    if (!col) return;
+    var btn = col.querySelector("[data-fault-btn]");
+    if (btn) {
+      var missing = q.items.filter(function (_, i) {
+        return q.faults[i] && !String(q.notes[i] || "").trim();
+      }).length;
+      btn.disabled = !!missing;
+      btn.style.opacity = missing ? ".4" : "1";
+      btn.style.cursor = missing ? "default" : "pointer";
+    }
+  }
+
+  function recordFaults(st, q) {
+    var items = q.items.map(function (it, i) {
+      return {
+        text: it.text, spec: it.spec || "",
+        result: q.faults[i] ? "fail" : "pass",
+        note: q.faults[i] ? String(q.notes[i] || "").trim() : ""
+      };
+    });
+    doWrite(st, function () {
+      return WFQC.recordFaults(state.ctx.t, st.job, {
+        phase: st.phase,
+        stationId: st.station.id,
+        listName: q.listName,
+        items: items,
+        worker: state.ctx.member
+      });
+    }, { keepView: "qc" })
+      .then(function () { delete qcState[st.station.id]; })
+      .catch(function (e) { if (!e || !e.dropped) throw e; })
+      .catch(function () { /* dialog already shown */ });
   }
 
   /**
@@ -1632,8 +1872,15 @@
    * comes back, the record can answer honestly how carefully it was checked.
    * Clear all is there so an accidental tap isn't ten taps to undo.
    */
-  function checkAllRow(st, q, checked, total) {
-    var all = total > 0 && checked === total;
+  function checkAllRow(st, q, checked, total, bad) {
+    /* "Everything dealt with", not "everything ticked".
+     *
+     * `checked` now excludes lines marked wrong, so comparing it to the total
+     * would never reach it once one line was failed -- the button would read
+     * "Check all 10" forever and there would be no way left on the screen to
+     * clear the mark. A failed line has been dealt with; it just wasn't ticked.
+     */
+    var all = total > 0 && (checked + (bad || 0)) === total;
     var row = O.el("div.wf-fl-allrow");
 
     // With no items there is nothing to check or clear, and the row exists only
@@ -1643,10 +1890,20 @@
       text: all ? "Clear all" : "Check all " + total,
       onClick: function () {
         if (all) {
+          /* Clear all clears everything, including the marks and the notes.
+           * Leaving faults behind was a trap: the ticks vanished, the red rows
+           * stayed, and there was no control on the screen that would clear
+           * them. "Clear all" has to mean what it says or it is worse than not
+           * being there. */
           q.checked = {};
+          q.faults = {};
+          q.notes = {};
           q.checkedAll = false;
         } else {
-          q.items.forEach(function (_, i) { q.checked[i] = true; });
+          /* Check all does NOT tick a line somebody marked wrong. Bulk-ticking
+           * over a fault is exactly the move this feature exists to make
+           * impossible, and it would do it in one tap. */
+          q.items.forEach(function (_, i) { if (!q.faults[i]) q.checked[i] = true; });
           // Only counts as a bulk tick if it wasn't nearly done by hand already.
           q.checkedAll = checked === 0;
         }
@@ -1817,12 +2074,12 @@
 
     function refreshSignState() {
       var ok = WFQC.canSignOff(q.items, q.checked, q.signature,
-        q.signedBy ? { username: q.signedBy } : null);
+        q.signedBy ? { username: q.signedBy } : null, q.faults);
       btn.disabled = !ok;
       btn.style.opacity = ok ? "1" : ".4";
       btn.classList.toggle("is-on", ok);
       hint.textContent = WFQC.signHint(q.items, q.checked, q.signature,
-        q.signedBy ? { username: q.signedBy } : null);
+        q.signedBy ? { username: q.signedBy } : null, q.faults);
     }
     refreshSignState();
     return box;
@@ -1863,6 +2120,17 @@
         listName: q.listName,
         items: q.items,
         checked: q.checked,
+        /* The marks go through too, so signOff's backstop is a real one.
+         *
+         * canSignOff takes `failed` as its fifth argument and signOff forwards
+         * it -- but this call never supplied it, so the backstop ran with
+         * "nothing failed" on the only path that reaches it. It happens to
+         * refuse anyway today, because marking a line wrong also clears its
+         * tick and the every-item-checked rule trips first. That is the whole
+         * problem: the guard was correct only for as long as this file kept
+         * clearing the tick, and a guard that depends on its caller doing
+         * something unrelated is not a guard. */
+        failed: q.faults,
         // Ticked in one go rather than line by line. Recorded, not prevented --
         // if a job comes back, the record answers honestly how it was checked.
         checkedAll: !!q.checkedAll,

@@ -66,6 +66,15 @@ function boot({ cards = [], safety = null, training = [], role = "manager" } = {
   win.eval(read("lib/store.js"));
   win.eval(read("lib/board-extras.js"));
   win.eval(read("lib/stage.js"));
+  /* lib/records.js reads QC rounds THROUGH WFQC -- roundItems to hydrate either
+   * round shape, modeOf, isFaultRound -- and guards every call so the module
+   * still loads without it. Those guards made this fixture pass while silently
+   * testing a different code path from the one that ships: without WFQC an
+   * old-shape round is read straight off rd.items, which carries no `index`,
+   * so every fault lost the fix filed against its position and the archive's
+   * "what was done about it" column read empty. ops.html loads lib/qc.js before
+   * lib/records.js, always; so does this. */
+  win.eval(read("lib/qc.js"));
 
   win.WFRest = {
     request(t, pathname) {
@@ -524,6 +533,81 @@ test("empty sections explain what would fill them", async () => {
   $(node, ".wf-rec-r").find((b) => /Quality/.test(textOf(b)))
     .dispatchEvent(new env.win.Event("click"));
   assert.match(textOf(env.win.document.getElementById("view")), /No quality checks recorded/);
+});
+
+test("the Quality header says how many checks are still in progress", async () => {
+  /* The pass rate is over the rounds somebody judged, "Checks" counts every
+   * round recorded. Side by side and unexplained those two read as a
+   * contradiction -- 2 checks, 100% passed, nothing sent back -- so the count
+   * says how many of them nobody has finished. */
+  const env = boot({
+    cards: [
+      card("A", { qc: { phase: "CAD", rounds: [
+        { n: 1, mode: "self", checkedBy: KEV, checkedAt: iso(-1),
+          items: [{ text: "Revision number is current", result: "pass" },
+                  { text: "Material called out", result: "fail" }] }
+      ] } }),
+      card("B", { qc: { phase: "CAD", rounds: [
+        { n: 1, mode: "floor", checkedBy: SCOTT, checkedAt: iso(-1),
+          items: [{ text: "Revision number is current", result: "pass" }] }
+      ] } })
+    ]
+  });
+  const node = await render(env);
+  $(node, ".wf-rec-r").find((b) => /Quality/.test(textOf(b)))
+    .dispatchEvent(new env.win.Event("click"));
+  const txt = textOf(env.win.document.getElementById("view"));
+  assert.match(txt, /1 still in progress/);
+  assert.match(txt, /100%/, "and the rate is over the finished one only");
+});
+
+test("Recent checks calls an unfinished check in progress, not a failed round", async () => {
+  /* ONE SCREEN MUST NOT CONTRADICT ITSELF. The summary above sets unfinished
+   * self-checks aside; this list was still painting the same round red as
+   * "round 1 failed" and naming the lines nobody had got to yet as though a
+   * checker had rejected them. A panel saying a check was set aside sitting
+   * above a panel calling it a failure is how people stop trusting a screen. */
+  const env = boot({
+    cards: [
+      card("A", { name: "Half-ticked job", qc: { phase: "CAD", rounds: [
+        { n: 1, mode: "self", checkedBy: KEV, checkedAt: iso(-1),
+          items: [{ text: "Revision number is current", result: "pass" },
+                  { text: "Material called out", result: "fail" },
+                  { text: "Dimensions match the measure sheet", result: "fail" }] }
+      ] } }),
+      card("B", { name: "Really failed job", qc: { phase: "Assemble Legacy", rounds: [
+        { n: 2, mode: "floor", checkedBy: SCOTT, checkedAt: iso(-2),
+          foundBy: SCOTT,
+          fixes: { 0: { what: "reheated and re-clamped", by: KEV, at: iso(-2) } },
+          items: [{ text: "Frame is square", result: "fail", note: "twisted 3mm" }] }
+      ] } })
+    ]
+  });
+  const node = await render(env);
+  $(node, ".wf-rec-r").find((b) => /Quality/.test(textOf(b)))
+    .dispatchEvent(new env.win.Event("click"));
+  const view = env.win.document.getElementById("view");
+  const row = $(view, ".wf-row").find((r) => /Half-ticked job/.test(textOf(r)));
+  assert.ok(row, "the unfinished check is still listed — set aside is not hidden");
+
+  const tag = row.querySelector(".wf-tag");
+  assert.equal(textOf(tag), "in progress",
+    "an unfinished self-check is labelled as in progress");
+  assert.ok(tag.classList.contains("wf-tag-quiet"),
+    "and in the neutral style, not the red one a failure gets");
+  assert.doesNotMatch(textOf(row), /failed/,
+    "nothing on the row calls it a failed round");
+  assert.match(textOf(row), /1 of 3 lines ticked so far/,
+    "the detail column counts progress instead of listing unticked lines as faults");
+  assert.doesNotMatch(textOf(row), /Material called out/,
+    "and does not name a line nobody has got to yet");
+
+  // The genuine failure is untouched, and now carries its answer inline.
+  const bad = $(view, ".wf-row").find((r) => /Really failed job/.test(textOf(r)));
+  assert.match(textOf(bad), /round 2 failed/, "a real failure still reads as one");
+  assert.ok(bad.querySelector(".wf-tag-late"), "and is still styled as one");
+  assert.match(textOf(bad), /Frame is square → reheated and re-clamped/,
+    "with what was done about it beside it, which is the point of keeping faults");
 });
 
 test("training lists expired first and a manager can edit", async () => {
