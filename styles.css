@@ -364,22 +364,31 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
    the flow there is nothing above it to pad away from. */
 .wf-shell.is-kiosk .wf-body { padding-top: 0; }
 /* A full-bleed tab cancels the body padding with negative margins. With the
-   padding already gone in kiosk, the top one would pull it off the screen. */
-.wf-shell.is-kiosk .wf-fl { margin-top: 0; }
+   padding already gone in kiosk, the top one would pull it off the screen.
+   The extra top padding is the gap that stops somebody reaching for the
+   Floor's own area tabs and clipping the reveal strip on the way. */
+.wf-shell.is-kiosk .wf-fl { margin-top: 0; padding-top: 46px; }
+@media (max-width: 600px) {
+  .wf-shell.is-kiosk .wf-fl { padding-top: 34px; }
+}
 
-/* A thin handle so the bar is discoverable without hunting: visible only while
-   hidden, and it disappears the moment the chrome comes down. */
-.wf-shell.is-kiosk .wf-chrome:after {
+/* A thin handle so the bar is discoverable without hunting.
+   It hangs off the SHELL rather than the chrome: the chrome is translated off
+   the top when hidden, and anything attached to it goes with it -- which would
+   have made the handle invisible at exactly the moment it is the only clue. */
+.wf-shell.is-kiosk:after {
   content: "";
-  position: absolute;
-  left: 50%; bottom: -5px;
+  position: fixed;
+  left: 50%; top: 0;
   width: 54px; height: 4px;
   margin-left: -27px;
-  border-radius: 999px;
+  border-radius: 0 0 999px 999px;
   background: rgba(255, 255, 255, .34);
   transition: opacity .18s ease;
+  z-index: 61;
+  pointer-events: none;
 }
-.wf-shell.is-kiosk.is-peek .wf-chrome:after { opacity: 0; }
+.wf-shell.is-kiosk.is-peek:after { opacity: 0; }
 
 /* --- the "i" and its panel ---------------------------------------------- */
 

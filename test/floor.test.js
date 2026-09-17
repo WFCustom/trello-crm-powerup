@@ -511,6 +511,50 @@ test("a late queued job is called out; an empty queue says what it's waiting on"
   assert.match(textOf(n2), /Nothing waiting in Assemble Legacy/);
 });
 
+test("Next up shows exactly two, side by side, with the rest behind a link", async () => {
+  // Two, not three, and never a scrolling stack: this answers "what am I
+  // building after this one". A third tile only shrinks the two that matter,
+  // and anything past that is the Full queue's job.
+  const env = boot({
+    role: "worker",
+    saved: ONE_STATION,
+    cards: [
+      job("A", "LA", { pos: 10, name: "#2431 Cedar Hills HOA — fence run B" }),
+      job("B", "LA", { pos: 20, name: "#2455 Alpine Fab — trailer deck" }),
+      job("C", "LA", { pos: 30, name: "#2470 Lehi Storage — cantilever" }),
+      job("D", "LA", { pos: 40, name: "#2488 Nielsen — deck rail" })
+    ]
+  });
+  const node = await render(env, 1280);
+
+  const tiles = $(node, ".wf-fl-q button.wf-fl-t");
+  assert.equal(tiles.length, 2);
+  assert.match(textOf(tiles[0]), /#2431/);
+  assert.match(textOf(tiles[1]), /#2455/);
+
+  // The job number leads and the position stays small -- the number is what a
+  // welder recognises from across the shop.
+  assert.equal($(tiles[0], ".wf-fl-t-num")[0].textContent, "#2431");
+  assert.equal($(tiles[0], ".wf-fl-t-p")[0].textContent, "01");
+  assert.ok(!/#2431/.test($(tiles[0], ".wf-fl-t-n")[0].textContent),
+    "the number is not repeated in the title");
+
+  assert.match(textOf(node), /\+ 2 more waiting/);
+});
+
+test("a queued job with no number in its name still reads", async () => {
+  const env = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("A", "LA", { pos: 10, name: "Overdue rail" })]
+  });
+  const node = await render(env, 1280);
+  const tile = $(node, ".wf-fl-q button.wf-fl-t")[0];
+  // Nothing worth reading on the top line, so the name takes the headline
+  // rather than being demoted under an empty one.
+  assert.equal($(tile, ".wf-fl-t-num").length, 0);
+  assert.match($(tile, ".wf-fl-t-n")[0].textContent, /Overdue rail/);
+});
+
 test("a station with no phase says so instead of rendering an empty column", async () => {
   const env = boot({
     role: "worker",

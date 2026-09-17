@@ -1182,28 +1182,59 @@
    * Touch gets the same behaviour from a tap near the top, since an iPad has no
    * hover at all and would otherwise have no way back.
    */
+  /* How far down the pointer has to be before the bar comes back.
+   *
+   * Deliberately small. At 70px it caught people reaching for the Floor's own
+   * area tabs, which sit near the top of the iframe just under Trello's modal
+   * header -- the bar kept dropping when nobody asked for it. A narrow strip at
+   * the very edge is still easy to hit on purpose and almost impossible to hit
+   * by accident. The Floor also holds its content further down in kiosk, so
+   * there is clear air between its tabs and this strip. */
+  var PEEK_EDGE = 22;
+
   var peekTimer = null;
   function setPeek(on) {
     var shell = document.querySelector(".wf-shell");
     if (!shell) return;
     if (peekTimer) { clearTimeout(peekTimer); peekTimer = null; }
-    if (on) { shell.classList.add("is-peek"); return; }
-    peekTimer = setTimeout(function () { shell.classList.remove("is-peek"); }, 450);
+    shell.classList.toggle("is-peek", !!on);
   }
 
+  /**
+   * The bar comes down when the pointer reaches the top edge, and goes away the
+   * moment it leaves the bar itself.
+   *
+   * No hide-delay: a timer means the bar hangs around after you have visibly
+   * moved off it, which reads as lag rather than patience. Leaving the chrome
+   * is an unambiguous "done with it", so it is the only signal needed.
+   */
   function watchForPeek() {
     if (watchForPeek.done) return;
     watchForPeek.done = true;
+
+    var inKiosk = function () {
+      var shell = document.querySelector(".wf-shell");
+      return shell && shell.classList.contains("is-kiosk") ? shell : null;
+    };
+
     document.addEventListener("mousemove", function (e) {
-      var shell = document.querySelector(".wf-shell");
-      if (!shell || !shell.classList.contains("is-kiosk")) return;
-      setPeek(e.clientY < 70);
+      if (!inKiosk()) return;
+      if (e.clientY <= PEEK_EDGE) setPeek(true);
     });
+
+    var chrome = document.querySelector(".wf-chrome");
+    if (chrome) {
+      chrome.addEventListener("mouseleave", function () {
+        if (inKiosk()) setPeek(false);
+      });
+    }
+
+    // An iPad has no hover, so a tap at the top opens it and a tap anywhere
+    // else closes it again.
     document.addEventListener("touchstart", function (e) {
-      var shell = document.querySelector(".wf-shell");
-      if (!shell || !shell.classList.contains("is-kiosk")) return;
+      if (!inKiosk()) return;
       var y = e.touches && e.touches[0] ? e.touches[0].clientY : 999;
-      if (y < 70) setPeek(true);
+      setPeek(y <= PEEK_EDGE * 3);
     }, { passive: true });
   }
 
@@ -1222,13 +1253,14 @@
     }
     if (was) return;
 
-    // Arriving: hold the bar down for a moment before it slides away, so the
-    // first thing somebody sees is where it went rather than that it is gone.
+    // Arriving: show the bar just long enough to register where it went, then
+    // get out of the way. 1.6s was long enough to feel like something was
+    // stuck; this is a glance, not a notification.
     shell.classList.add("is-peek");
     if (peekTimer) clearTimeout(peekTimer);
     peekTimer = setTimeout(function () {
       shell.classList.remove("is-peek");
-    }, 1600);
+    }, 800);
   }
 
   function renderActive() {

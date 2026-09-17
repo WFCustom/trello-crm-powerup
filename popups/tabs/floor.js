@@ -150,7 +150,12 @@
       ".wf-fl-idle b{display:block;font-family:'Barlow Condensed',inherit;font-size:22px;",
       "font-weight:700;text-transform:uppercase;color:var(--p-idle);margin-bottom:4px}",
 
-      ".wf-fl-q{display:flex;flex-direction:column;gap:7px}",
+      /* NEXT UP: two tiles side by side, as in the mock.
+         Two, not three, and never a scrolling stack -- this is "what am I
+         building after this one", and a list long enough to need reading is the
+         Full queue's job. Square-ish so the pair reads as a set rather than as
+         two rows that happen to be adjacent. */
+      ".wf-fl-q{display:grid;grid-template-columns:1fr 1fr;gap:9px}",
       ".wf-fl-t{display:flex;gap:11px;align-items:flex-start;background:var(--p-tile);",
       "border-radius:14px;padding:10px 12px;min-width:0;border:1.5px solid transparent}",
       ".wf-fl-t:hover{border-color:var(--p-track)}",
@@ -161,6 +166,17 @@
       ".wf-fl-t-n{font-size:13.5px;font-weight:600;color:var(--p-ink);line-height:1.3;",
       "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}",
       ".wf-fl-t-d{font-size:11.5px;color:var(--p-muted);margin-top:2px}",
+
+      /* Scoped to the Next up grid: the Full queue view reuses .wf-fl-t in a
+         horizontal row with reorder arrows and must keep that shape. */
+      ".wf-fl-q .wf-fl-t{flex-direction:column;gap:5px;padding:12px 13px;",
+      "min-height:104px;border-radius:16px}",
+      ".wf-fl-q .wf-fl-t-top{display:flex;align-items:baseline;gap:8px;width:100%}",
+      ".wf-fl-q .wf-fl-t-p{font-size:12px;letter-spacing:.06em;min-width:0}",
+      ".wf-fl-q .wf-fl-t-num{font-family:'Barlow Condensed',inherit;font-size:21px;",
+      "font-weight:700;line-height:1;color:var(--p-ink)}",
+      ".wf-fl-q .wf-fl-t-m{flex:1 1 auto;width:100%;display:flex;flex-direction:column}",
+      ".wf-fl-q .wf-fl-t-d{margin-top:auto;padding-top:6px}",
       ".wf-fl-t-d.is-late{color:var(--p-warn);font-weight:700}",
       ".wf-fl-more{font-size:11.5px;color:var(--p-muted);padding-left:2px}",
 
@@ -934,7 +950,10 @@
   /* ------------------------------------------------------------- the queue */
 
   function queue(st, scale) {
-    var show = scale.compact ? 2 : 3;
+    // Always two. The mock shows a pair side by side and stops, because this
+    // answers "what's after this one" -- anything past that is the Full queue's
+    // job, and a third tile only shrinks the two that matter.
+    var show = 2;
     var box = O.el("div", { style: "display:flex;flex-direction:column;gap:8px" });
 
     var head = O.el("div.wf-fl-qhead", null,
@@ -972,19 +991,34 @@
     return box;
   }
 
+  /**
+   * One "Next up" tile.
+   *
+   * Position and job number share the top line, the way the mock has it --
+   * "01  #2431". The number is what a welder recognises from across the shop,
+   * so it gets the weight; the position is just running order and stays small.
+   */
   function queueTile(st, c, i) {
     var late = WFTables.isLate(c);
     var w = WFTables.activeWork(c);
     var who = w && w.claimedBy ? O.firstName(w.claimedBy) : "Unclaimed";
+    var num = jobNumber(c);
+
+    var top = O.el("div.wf-fl-t-top", null,
+      O.el("div.wf-fl-t-p", { text: String(i + 1).padStart(2, "0") }));
+    if (num) top.appendChild(O.el("div.wf-fl-t-num", { text: num }));
+
     return O.el("button.wf-fl-t" + (late ? ".is-late" : "") + (st.job ? "" : ".is-open"), {
       type: "button",
       title: st.job ? "Switch to this job" : "Start this job",
       style: "width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer",
       onClick: function () { requestStart(st, c); }
     },
-      O.el("div.wf-fl-t-p", { text: String(i + 1).padStart(2, "0") }),
+      top,
       O.el("div.wf-fl-t-m", null,
-        O.el("div.wf-fl-t-n", { text: c.name }),
+        // Without a number in the name there is nothing on the top line worth
+        // reading, so the name takes the headline instead of being demoted.
+        O.el("div.wf-fl-t-n", { text: num ? jobTitle(c) : c.name }),
         O.el("div.wf-fl-t-d" + (late ? ".is-late" : ""), {
           text: who + " · " + (dueText(c) || "no date set")
         })));
