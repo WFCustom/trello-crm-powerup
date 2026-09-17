@@ -14,11 +14,36 @@
     The chain: Trello loads index.html -> connector.js?v -> ops.html?t=<now>
     -> every asset ?v. Each link exists because the one outside it caches.
   -->
+  <!--
+    THIS LIST MUST NOT BE A SHORTER VERSION OF popups/ops.html's.
+
+    It was, and two things silently broke on every card surface:
+
+    lib/board-extras.js adds the three Assemble lists (Legacy, CAP, CNC) to the
+    board map at runtime, because they were created after config.js was written.
+    Without it the connector's WFStage has never heard of the lists where all the
+    welding happens: getStageForList and getNextStage answer null, so a card
+    completed from a card button or the card back does not move and the log
+    entry records a raw list id instead of a phase name. The test harness loads
+    this file, so every test saw a board the connector did not have.
+
+    lib/jobtype.js + lib/advance.js install the route-aware WFPhase.advance
+    wrapper. lib/phase.js deliberately calls through the global so the wrapper
+    applies -- with neither file loaded there is no wrapper, and every card
+    advanced from a card surface routes as legacy. That is the same regression
+    we fixed for the ops window; it was still live here.
+
+    Order matters: config.js, then board-extras, then stage.js; jobtype before
+    advance; advance after phase.js, because it wraps what phase.js defines.
+  -->
   <script src="https://p.trellocdn.com/power-up.min.js"></script>
-  <script src="./config.js?v=20260916k"></script>
-  <script src="./lib/stage.js?v=20260916k"></script>
-  <script src="./lib/trello-rest.js?v=20260916k"></script>
-  <script src="./lib/phase.js?v=20260916k"></script>
-  <script src="./connector.js?v=20260916k"></script>
+  <script src="./config.js?v=20260916m"></script>
+  <script src="./lib/board-extras.js?v=20260916m"></script>
+  <script src="./lib/stage.js?v=20260916m"></script>
+  <script src="./lib/trello-rest.js?v=20260916m"></script>
+  <script src="./lib/phase.js?v=20260916m"></script>
+  <script src="./lib/jobtype.js?v=20260916m"></script>
+  <script src="./lib/advance.js?v=20260916m"></script>
+  <script src="./connector.js?v=20260916m"></script>
 </body>
 </html>

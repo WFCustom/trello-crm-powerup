@@ -54,45 +54,63 @@
   }
 
   /**
-   * Finishing a phase asks who should check the work. Either name a peer or
-   * release it to the pool for anyone qualified to pick up. Their sign-off is
-   * the approval -- there's no second manager gate on shop phases.
+   * RETIRED, NOT DELETED — nothing calls this.
+   *
+   * It hands the job to a named checker to look at LATER: complete the phase,
+   * write a qcRecord with status "awaiting_check", and wait. The only screen
+   * that ever rendered that status was the Quality check tab, which is retired,
+   * so every job sent this way stopped dead — off the shop floor, into "Waiting
+   * on a manager", and no manager coming.
+   *
+   * Kept because deferred checking is a real thing a shop might want back for a
+   * phase where the checker genuinely is not standing there (a coating that has
+   * to cure overnight before anyone can judge it). Bringing it back means
+   * bringing back a surface that services "awaiting_check" — do not re-point a
+   * button at this without one.
+   *
+   * Finishing a phase now goes through WFChecklist, which asks for the checker's
+   * name at the moment of signing instead of queueing the job against it.
+   *
+   * It is commented out rather than left callable on purpose: an unreachable
+   * function that still calls WFPhase.complete() and stops there reads, to
+   * anyone auditing which paths strand a card, exactly like a live one.
+   *
+   *   function openQcChooser(ctx, card, stage) {
+   *     var byUser = {};
+   *     (ctx.board.members || []).forEach(function (m) { byUser[m.username] = m; });
+   *     var specialists = (ctx.roster.phaseSpecialists || {})[stage ? stage.name : ""] || [];
+   *     var pool = (specialists.length ? specialists : Object.keys(byUser))
+   *       .filter(function (u) { return u !== ctx.member.username; });
+   *
+   *     var sel = O.el("select", null, O.el("option", { value: "",
+   *       text: pool.length ? "Anyone can check it (QC pool)" : "No one else on this board yet" }));
+   *     pool.forEach(function (u) {
+   *       sel.appendChild(O.el("option", { value: u,
+   *         text: O.displayName(byUser[u] || { username: u }) }));
+   *     });
+   *
+   *     function finish() {
+   *       var reviewer = sel.value ? (byUser[sel.value] || { username: sel.value }) : null;
+   *       return WFPhase.complete(ctx.t, meta(ctx, card))
+   *         .then(function () {
+   *           return WFQC.request(ctx.t, meta(ctx, card),
+   *             stage ? stage.name : "", ctx.member, reviewer);
+   *         })
+   *         .then(function () { return ctx.syncCard(card.id); });
+   *     }
+   *
+   *     O.dialog({
+   *       title: "Send it for a quality check",
+   *       note: card.name + (stage ? " · " + stage.name : ""),
+   *       content: O.el("div", null,
+   *         O.el("label", { text: "Who should check it?" }), sel,
+   *         O.el("div.hint", { style: "margin-top:10px",
+   *           text: "Leave it on the pool and whoever's free can pick it up." })),
+   *       buttons: [{ label: "Send for QC", primary: true,
+   *                   busyText: "Sending…", onClick: finish }]
+   *     });
+   *   }
    */
-  function openQcChooser(ctx, card, stage) {
-    var byUser = {};
-    (ctx.board.members || []).forEach(function (m) { byUser[m.username] = m; });
-    var specialists = (ctx.roster.phaseSpecialists || {})[stage ? stage.name : ""] || [];
-    var pool = (specialists.length ? specialists : Object.keys(byUser))
-      .filter(function (u) { return u !== ctx.member.username; });   // never check your own work
-
-    var sel = O.el("select", null,
-      O.el("option", { value: "", text: pool.length ? "Anyone can check it (QC pool)" : "No one else on this board yet" }));
-    pool.forEach(function (u) {
-      sel.appendChild(O.el("option", { value: u, text: O.displayName(byUser[u] || { username: u }) }));
-    });
-
-    function finish() {
-      var reviewer = sel.value ? (byUser[sel.value] || { username: sel.value }) : null;
-      return WFPhase.complete(ctx.t, meta(ctx, card))
-        .then(function () {
-          return WFQC.request(ctx.t, meta(ctx, card), stage ? stage.name : "", ctx.member, reviewer);
-        })
-        .then(function () { return ctx.syncCard(card.id); });
-    }
-
-    O.dialog({
-      title: "Send it for a quality check",
-      note: card.name + (stage ? " · " + stage.name : ""),
-      content: O.el("div", null,
-        O.el("label", { text: "Who should check it?" }),
-        sel,
-        O.el("div.hint", { style: "margin-top:10px",
-          text: "Leave it on the pool and whoever's free can pick it up. Once it passes, the job moves to the next phase." })),
-      buttons: [{
-        label: "Send for QC", primary: true, busyText: "Sending…", onClick: finish
-      }]
-    });
-  }
 
   /* The self-check dialog moved to popups/checklist.js (WFChecklist.open) so
      the Work board could use the same one. It was the only copy; leaving a
@@ -145,19 +163,24 @@
                line, so somebody still puts their name to it and the job still
                moves. See WFQC.qcPhases and WFQC.selfCheckPhases for which
                phases ask for a second pair of eyes. */
-            WFQC.requiresQc(stage ? stage.name : "")
-              ? O.btn("I'm done — send for QC", {
-                  primary: true,
-                  onClick: function () { openQcChooser(ctx, card, stage); }
-                })
-              : O.btn("I'm done — run my checklist", {
-                  primary: true,
-                  onClick: function () {
-                    WFChecklist.open(ctx, card, stage, function () {
-                      return ctx.syncCard(card.id);
-                    });
-                  }
-                })),
+            /* ONE BUTTON, ONE PATH. The peer branch used to call
+               openQcChooser, which completed the phase and parked a
+               qcRecord for the Quality check tab to service. That tab is
+               retired, so the card went off the station, into "Waiting on a
+               manager", and stayed there -- from the primary green button on
+               most shop phases. WFChecklist now asks who checked it, so the
+               peer distinction survives as the name on the signature rather
+               than as a queue nothing services. */
+            O.btn(WFQC.requiresQc(stage ? stage.name : "")
+              ? "I'm done — check and sign"
+              : "I'm done — run my checklist", {
+                primary: true,
+                onClick: function () {
+                  WFChecklist.open(ctx, card, stage, function () {
+                    return ctx.syncCard(card.id);
+                  });
+                }
+              })),
           reassignRow(ctx, card, stage))));
     return p;
   }

@@ -2,7 +2,14 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <link rel="stylesheet" href="../styles.css">
+  <!--
+    VERSIONED, LIKE ops.html. This is a live per-card work surface running
+    inside a Trello iframe, which caches exactly as hard as the ops window does.
+    It was the only work surface outside the cache-bust scheme, so it could be
+    running a months-old lib/phase.js and config.js against a current board with
+    nothing to show for it. Bump these with WF_BUILD in popups/ops.html.
+  -->
+  <link rel="stylesheet" href="../styles.css?v=20260916m">
   <style>
     body { padding: 12px; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -21,10 +28,17 @@
   <div id="content" class="loading">Loading job actions…</div>
 
   <script src="https://p.trellocdn.com/power-up.min.js"></script>
-  <script src="../config.js"></script>
-  <script src="../lib/stage.js"></script>
-  <script src="../lib/trello-rest.js"></script>
-  <script src="../lib/phase.js"></script>
-  <script src="./card-back.js"></script>
+  <!-- board-extras, jobtype and advance for the same reasons index.html now
+       loads them: without the first this surface has never heard of the three
+       Assemble lists, and without the last two every card it advances routes
+       as legacy. -->
+  <script src="../config.js?v=20260916m"></script>
+  <script src="../lib/board-extras.js?v=20260916m"></script>
+  <script src="../lib/stage.js?v=20260916m"></script>
+  <script src="../lib/trello-rest.js?v=20260916m"></script>
+  <script src="../lib/phase.js?v=20260916m"></script>
+  <script src="../lib/jobtype.js?v=20260916m"></script>
+  <script src="../lib/advance.js?v=20260916m"></script>
+  <script src="./card-back.js?v=20260916m"></script>
 </body>
 </html>

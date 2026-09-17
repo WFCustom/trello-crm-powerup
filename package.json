@@ -7,8 +7,9 @@
     "test": "node --test \"test/*.test.js\"",
     "test:live": "node --test \"test/*.live.js\""
   },
+  "//engines": "21, not 20: `node --test \"test/*.test.js\"` relies on the test runner expanding that glob itself, which landed in Node 21. The pattern is quoted so the shell does not expand it either -- on Node 20 the runner is handed the literal string, finds no such file and errors out looking like a missing test directory. CI pins 22.",
   "engines": {
-    "node": ">=20"
+    "node": ">=21"
   },
   "devDependencies": {
     "jsdom": "^30.0.1"

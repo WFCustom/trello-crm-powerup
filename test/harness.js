@@ -13,7 +13,17 @@
  *
  * Load order matters and is not inferred: lib/stage.js captures WF_CONFIG in a
  * const at load time, so config.js must come first. LOAD_ORDER mirrors the
- * <script> order in popups/ops.html; keep the two in step.
+ * config + lib + ops.js portion of popups/ops.html's <script> order; keep the
+ * two in step. It deliberately stops before the tab files and the two shared
+ * popups, which need a real DOM -- the jsdom suites (floor, dashboard, aging,
+ * records, eos) load those individually.
+ *
+ * ONE THING THIS HARNESS HAS CONCEALED BEFORE, SO CHECK IT WHEN A TEST PASSES
+ * AND THE BOARD DISAGREES: it loads lib/board-extras.js, which adds the three
+ * Assemble lists to the board map at runtime. index.html did not, so for months
+ * every test saw a board with those lists and the connector saw one without.
+ * Anything loaded here must be loaded by the HTML surface it is meant to
+ * represent, or the suite is testing a configuration nobody runs.
  */
 "use strict";
 

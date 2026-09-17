@@ -557,12 +557,25 @@
         return Promise.all([
           t.get(c.id, "shared", "phaseWork", null).catch(function () { return undefined; }),
           t.get(c.id, "shared", "phaseLog", []).catch(function () { return undefined; }),
-          // qcRequest isn't part of getBoardCardsFull, so it only ever arrives here.
+          /* WFQC.KEY IS "qcRecord", AND THAT IS THE NAME IT HAS TO LAND UNDER.
+           *
+           * This used to assign the result to `c.qcRequest`. Nothing in the
+           * repo reads that name -- every consumer (WFQC.activeRecord,
+           * WFQC.floorSignOff, WFRecords) reads `card.qcRecord`. So the fresh,
+           * authoritative SDK copy was fetched on every load and thrown into a
+           * dead property, leaving the lagging REST copy in place: a welder
+           * signed the checklist, the write succeeded, and the repaint read a
+           * pre-sign snapshot and showed the job as unsigned. Complete bounced
+           * them straight back into the checklist they had just signed.
+           *
+           * The old comment claimed this key wasn't part of getBoardCardsFull.
+           * It is (trello-rest.js), which is exactly why the stale value
+           * survived instead of the field simply being absent. */
           t.get(c.id, "shared", WFQC.KEY, null).catch(function () { return undefined; })
         ]).then(function (r) {
           if (r[0] !== undefined) c.phaseWork = r[0];
           if (r[1] !== undefined) c.phaseLog = r[1];
-          if (r[2] !== undefined) c.qcRequest = r[2];
+          if (r[2] !== undefined) c.qcRecord = r[2];
         });
       })).then(nextBatch);
     }
@@ -677,7 +690,9 @@
       var patch = {};
       if (r[0] !== undefined) patch.phaseWork = r[0];
       if (r[1] !== undefined) patch.phaseLog = r[1];
-      if (r[2] !== undefined) patch.qcRequest = r[2];
+      // "qcRecord", not "qcRequest" -- see overlayPhaseState above. Same bug,
+      // same consequence: a signed check reading back as unsigned.
+      if (r[2] !== undefined) patch.qcRecord = r[2];
       if (extra) assignInto(patch, extra);
       return patchCachedCard(cardId, patch);
     }).then(function () {

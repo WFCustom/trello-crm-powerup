@@ -14,6 +14,18 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const { JSDOM } = require("jsdom");
+const { after } = require("node:test");
+
+/* EVERY WINDOW GETS CLOSED, LIKE THE OTHER FOUR JSDOM SUITES.
+ *
+ * boot() is called around thirty times here with pretendToBeVisual, and none of
+ * them was ever closed. It does not hang today only because neither the EOS tab
+ * nor the shell registers a timer -- the moment either grows one (the Floor tab
+ * already has a 30s interval), `node --test` stops exiting and the failure
+ * looks like a test that never finishes rather than a window that was left
+ * open. Until then it is just thirty leaked DOMs per run. */
+const OPEN = [];
+after(() => { OPEN.forEach((w) => { try { w.close(); } catch (e) { /* already gone */ } }); });
 
 const ROOT = path.join(__dirname, "..");
 const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -90,6 +102,7 @@ function boot({ role = "manager", records = {}, cards = CARDS, labels = LABELS }
     { runScripts: "outside-only", pretendToBeVisual: true }
   );
   const win = dom.window;
+  OPEN.push(win);
 
   const calls = [];
   const store = Object.assign({}, records);

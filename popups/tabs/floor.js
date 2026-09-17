@@ -301,7 +301,7 @@
 
   /* Module-level so switching tabs and coming back keeps you on the same
      screen, and so the timers below have something stable to clean up. */
-  var state = { area: "shop", cfg: null, cards: null, host: null, ctx: null };
+  var state = { area: "shop", cfg: null, cards: null, host: null, ctx: null, scale: null };
 
   /**
    * One interval and one resize handler for the whole tab, replaced rather than
@@ -459,7 +459,8 @@
     }
     var cols = WFTables.columnsFor(window.innerWidth || 1200, states.length);
     wrap.style.gridTemplateColumns = "repeat(" + Math.max(1, cols) + ",minmax(0,1fr))";
-    var scale = WFTables.scaleFor(cols);
+    // Kept so repaintColumn redraws a column at the size its neighbours are at.
+    var scale = state.scale = WFTables.scaleFor(cols);
     states.forEach(function (st) { wrap.appendChild(column(st, scale)); });
     return wrap;
   }
@@ -477,8 +478,11 @@
    * write puts you back where you were instead of throwing you to Station.
    */
 
-  /** stationId -> "station" | "card" | "qc" | "assign" | "queue" */
+  /** stationId -> "station" | "card" | "qc" | "assign" | "queue" | "preview" */
   var views = {};
+
+  /** stationId -> the pool card being previewed from the assign list. */
+  var previewing = {};
 
   /** stationId -> the checklist being worked: items, ticks, signature, signer. */
   var qcState = {};
@@ -513,7 +517,19 @@
     if (!state.host) return;
     var old = state.host.querySelector('[data-station="' + st.station.id + '"]');
     if (!old) return paint();
-    var fresh = column(st, WFTables.scaleFor(
+    /* THE SCALE COMES FROM THE GRID, NOT FROM THIS COLUMN.
+     *
+     * This used to recompute it with a station count of 1 -- which answers "one
+     * column wide", so type came back at the single-column size while the three
+     * columns beside it stayed at the four-up size. Every repaint (a checkbox,
+     * closing a view, a switch) blew that one column's job number from 34px to
+     * 56px inside a grid track that had not changed width, so the text rewrapped
+     * and the whole card jumped. That is the preview "shrinking up": the column
+     * was being redrawn to a layout it is not in.
+     *
+     * state.scale is whatever the last full paint decided, which is the only
+     * value that agrees with the neighbours. */
+    var fresh = column(st, state.scale || WFTables.scaleFor(
       WFTables.columnsFor(window.innerWidth || 1200, 1)));
     old.parentNode.replaceChild(fresh, old);
   }
@@ -547,6 +563,25 @@
       }));
       return col;
     }
+
+    // A pool card being read before it is assigned. Same panel, but the way out
+    // is back to the list you opened it from, not to the station.
+    if (kind === "preview" && previewing[st.station.id]) {
+      col.classList.add("is-card");
+      col.appendChild(WFCardPanel.inline(state.ctx, previewing[st.station.id], {
+        kicker: "Trello card",
+        backLabel: "‹ Back to list",
+        onBack: function () {
+          delete previewing[st.station.id];
+          setView(st, "assign");
+        }
+      }));
+      return col;
+    }
+
+    // A preview whose card has gone (a reload, a card that moved phase) falls
+    // back to the list it came from rather than drawing an empty frame.
+    if (kind === "preview") kind = "assign";
 
     if (kind !== "station") {
       col.appendChild(viewHeader(st, kind));
@@ -846,21 +881,31 @@
     var signed = WFQC.floorSignOff(st.job);
     var row = O.el("div.wf-fl-run");
 
-    if (!canWork(st)) {
-      row.appendChild(O.el("div.wf-fl-more", {
-        text: "Nobody has claimed this job yet."
-      }));
-      return row;
-    }
+    /* START IS NEVER ABSENT FROM A JOB ON THE BENCH.
+     *
+     * This used to render a sentence instead of the buttons whenever the job
+     * had no claim on it, which turned an unclaimed job into a dead end: no way
+     * to start it, no way to clear it, and -- because the bench slot is above
+     * the queue -- no way to get at the work behind it either. A welder
+     * standing at that station has no move.
+     *
+     * A job on a bench with nobody's name on it is not a locked state, it is
+     * just a job nobody has picked up. Start picks it up: claim it and put it
+     * on the clock in one press, which is exactly what tapping it in the queue
+     * would have done. Whose name goes on it is answered by pressing the
+     * button, not by finding somebody to assign it first.
+     */
+    var claimed = !!(WFTables.activeWork(st.job) || {}).claimedBy;
 
     row.appendChild(O.el("button.wf-fl-btn", {
       type: "button",
       text: running ? "■ Stop" : "▶ Start",
+      title: claimed ? "" : "Nobody has claimed this job — starting it claims it for you",
       onClick: function () {
         write(st, function () {
-          return running
-            ? WFPhase.pause(state.ctx.t, st.job)
-            : WFPhase.resume(state.ctx.t, st.job);
+          if (running) return WFPhase.pause(state.ctx.t, st.job);
+          if (claimed) return WFPhase.resume(state.ctx.t, st.job);
+          return WFPhase.claimAndStart(state.ctx.t, st.job, state.ctx.member);
         });
       }
     }));
@@ -874,10 +919,18 @@
     return row;
   }
 
-  /** Somebody has this job on the clock, so the controls mean something. */
+  /**
+   * Is there phase work here for a control to act on?
+   *
+   * Deliberately NOT "is it claimed". It used to be, and that hid the percent
+   * slider on any job without a claim -- which, combined with the Start button
+   * being hidden for the same reason, left the bench with a job on it and not a
+   * single control. `setPercentComplete` writes onto whatever phase work
+   * exists, claimed or not, so there is nothing for the stricter test to
+   * protect.
+   */
   function canWork(st) {
-    var w = WFTables.activeWork(st.job);
-    return !!(w && w.claimedBy);
+    return !!WFTables.activeWork(st.job);
   }
 
   /**
@@ -1207,6 +1260,28 @@
       tile.appendChild(O.el("div.wf-fl-t-d" + (late ? ".is-late" : ""),
         { text: dueText(c) || "no date set" }));
 
+      /* SAY WHEN A JOB IS ALREADY SOMEBODY'S.
+       *
+       * The pool is "not on a station", which is not the same as "nobody has
+       * it": a job claimed and started from My jobs has no tableId and lands
+       * here looking exactly like fresh work. WFPhase.assign overwrites
+       * phaseWork wholesale, so one tap threw away that person's claim, their
+       * segments and their percentage with no warning and no way back.
+       *
+       * Reassigning genuinely is needed -- somebody leaves a job running and
+       * goes home -- so the tile says whose it is and how far along, and the
+       * button asks before it clobbers. The manager keeps the power; they just
+       * stop using it by accident. */
+      var held = WFTables.activeWork(c);
+      if (held && held.claimedBy) {
+        var pct = typeof held.percentComplete === "number" ? held.percentComplete : 0;
+        tile.appendChild(O.el("div.wf-fl-t-d", {
+          style: "color:var(--p-warn);font-weight:700",
+          text: (WFTables.isRunning(held) ? "On the clock — " : "Claimed by ") +
+                O.displayName(held.claimedBy) + " · " + pct + "%"
+        }));
+      }
+
       var acts = O.el("div.wf-fl-arow");
       acts.appendChild(O.el("button.wf-fl-link", {
         type: "button", text: "↗ Preview",
@@ -1225,23 +1300,52 @@
   }
 
   /** Preview a pool card, with a way back to the list rather than to Station. */
+  /**
+   * Preview a pool card without leaving the column.
+   *
+   * It goes through the view state like everything else. It used to reach into
+   * the DOM and rewrite the column directly while `views` still said "assign",
+   * so the next paint -- a write on another station, a window resize, the
+   * 30-second clock -- silently threw the preview away and snapped back to the
+   * list. Somebody reading a drawing lost it because a colleague pressed Start
+   * three benches away.
+   */
   function previewFromAssign(st, card) {
-    var col = state.host.querySelector('[data-station="' + st.station.id + '"]');
-    if (!col) return;
-    col.textContent = "";
-    col.classList.add("is-card");
-    col.appendChild(WFCardPanel.inline(state.ctx, card, {
-      kicker: "Trello card",
-      backLabel: "‹ Back to list",
-      onBack: function () { setView(st, "assign"); }
-    }));
+    previewing[st.station.id] = card;
+    setView(st, "preview");
   }
 
   function assignTo(st, card, username) {
     var member = ((state.ctx.board && state.ctx.board.members) || [])
       .filter(function (m) { return m.username === username; })[0];
     if (!member) return;
-    write(st, function () {
+
+    // Reassigning live work destroys the claim, the segments and the percent,
+    // and there is no undo. Ask once, naming what gets lost.
+    var held = WFTables.activeWork(card);
+    if (held && held.claimedBy && held.claimedBy.username !== username) {
+      var mins = WFTables.elapsedMinutes(held);
+      return O.dialog({
+        title: "Take this off " + O.firstName(held.claimedBy) + "?",
+        note: O.displayName(held.claimedBy) + " has this job at " +
+              (held.percentComplete || 0) + "%" +
+              (mins ? " with " + WFTables.clockText(mins) + " logged" : "") +
+              ". Assigning it to " + O.displayName(member) +
+              " clears that and starts the phase from zero. There is no undo.",
+        buttons: [{
+          label: "Reassign to " + O.firstName(member), primary: true,
+          busyText: "Reassigning…",
+          onClick: function () { return doAssign(st, card, member); }
+        }, {
+          label: "Leave it with " + O.firstName(held.claimedBy), quiet: true
+        }]
+      });
+    }
+    doAssign(st, card, member);
+  }
+
+  function doAssign(st, card, member) {
+    return write(st, function () {
       return WFPhase.assign(state.ctx.t, card, state.ctx.member, member)
         .then(function () {
           return WFTables.setStation(state.ctx.t, card, st.station.id, st.queue.length);
@@ -1314,8 +1418,11 @@
    */
   function askComplete(st) {
     if (!WFQC.floorSignOff(st.job)) {
-      qcState[st.station.id] = qcState[st.station.id] || {};
-      qcState[st.station.id].pending = true;
+      // Stamped with the job, so qcView can tell an in-progress list for THIS
+      // job from one left behind by the last job on this bench.
+      var q = qcState[st.station.id];
+      if (!q || q.cardId !== st.job.id) q = qcState[st.station.id] = { cardId: st.job.id };
+      q.pending = true;
       return setView(st, "qc");
     }
     confirmComplete(st);
@@ -1368,15 +1475,36 @@
       return box;
     }
 
+    /* A CHECKLIST IN PROGRESS BELONGS TO A JOB, NOT TO A BENCH.
+     *
+     * qcState is keyed by station, and nothing cleared it when the job on that
+     * station changed. So a welder who ticked 7 of 10 on one job and then got
+     * pulled onto another opened the checklist on the NEW job already showing
+     * "7 of 10 checked" -- for work nobody had inspected. Tick the last three,
+     * sign, and the stored record asserts a careful line-by-line check of a job
+     * that was never looked at.
+     *
+     * That is worse than a UI glitch. The entire argument for replacing manager
+     * approval with a signed checklist is that the checklist is a truer record
+     * than an approval click; a checklist that inherits somebody else's ticks is
+     * a worse one. So the job it was started against is stamped on it, and a
+     * mismatch throws the whole thing away and starts clean. */
+    if (q && q.cardId && q.cardId !== st.job.id) {
+      delete qcState[id];
+      q = null;
+    }
+
     if (!q || !q.items) {
       box.appendChild(O.el("div.loading", { text: "Reading the checklist…" }));
       WFQC.checklistFor(state.ctx.t, st.station).then(function (r) {
         qcState[id] = Object.assign({ checked: {}, signature: "", signedBy: "" },
-          qcState[id] || {}, { items: r.items, listName: r.name, source: r.source });
+          qcState[id] || {},
+          { cardId: st.job.id, items: r.items, listName: r.name, source: r.source });
         repaintColumn(st);
       }).catch(function () {
         qcState[id] = Object.assign({ checked: {}, signature: "", signedBy: "" },
-          qcState[id] || {}, { items: [], listName: null, source: "draft" });
+          qcState[id] || {},
+          { cardId: st.job.id, items: [], listName: null, source: "draft" });
         repaintColumn(st);
       });
       return box;
@@ -1409,10 +1537,32 @@
     box.appendChild(head);
     box.appendChild(O.el("div.wf-fl-bar", null, fill));
 
+    /* AN EMPTY CHECKLIST MUST NOT BE A LOCKED DOOR.
+     *
+     * Only Assemble ships with a default list, so the blast booth, the powder
+     * booth, the cure oven and Install all land here with nothing to tick. This
+     * used to return before the rest of the view was built -- including, as it
+     * happens, the manager-only "Edit this list" button, which lives inside
+     * checkAllRow. Complete sends you to the checklist, the checklist has no
+     * items, canSignOff refuses an empty list, so the job cannot be passed on
+     * and the one control that could fix it was below the early return. The
+     * whole finishing bay could start work and never hand it off, and the
+     * manager standing right there could not unblock it either.
+     *
+     * So the row comes first and the message sits under it: a manager builds
+     * the list without leaving the bench, and everyone else is told plainly
+     * whose job that is.
+     */
     if (!total) {
+      box.appendChild(checkAllRow(st, q, 0, 0));
       box.appendChild(O.el("div.wf-fl-more", {
-        text: "No checklist set up for this station yet. A manager makes one in " +
-              "the Roster and points this station at it in the gear."
+        text: state.ctx.isManager
+          ? "No checklist for this station yet. Build one with “Edit this list” " +
+            "above — it saves to the shared library, so every station using it " +
+            "gets it."
+          : "No checklist set up for this station yet, so this job can't be " +
+            "passed on. A manager needs to build one — tell them, and they can " +
+            "do it from this screen."
       }));
       return box;
     }
@@ -1456,10 +1606,12 @@
    * Clear all is there so an accidental tap isn't ten taps to undo.
    */
   function checkAllRow(st, q, checked, total) {
-    var all = checked === total;
+    var all = total > 0 && checked === total;
     var row = O.el("div.wf-fl-allrow");
 
-    row.appendChild(O.el("button.wf-fl-link", {
+    // With no items there is nothing to check or clear, and the row exists only
+    // to carry "Edit this list" for a manager building the list from here.
+    if (total) row.appendChild(O.el("button.wf-fl-link", {
       type: "button",
       text: all ? "Clear all" : "Check all " + total,
       onClick: function () {
@@ -1661,9 +1813,23 @@
   function signOff(st, q) {
     var signer = ((state.ctx.board && state.ctx.board.members) || [])
       .filter(function (m) { return m.username === q.signedBy; })[0];
-    if (!signer) return;
+    // A button that does nothing and says nothing is how this whole afternoon
+    // started. If the chosen signer can't be resolved against the board, say so.
+    if (!signer) {
+      return O.dialog({
+        title: "Pick who checked it",
+        note: "That name isn't on this board any more, so the sign-off has " +
+              "nobody to attribute. Choose someone from the list and sign again.",
+        buttons: []
+      });
+    }
 
-    write(st, function () {
+    // doWrite, not write: write() swallows the rejection and resolves, so the
+    // `delete` below ran even when the sign-off had failed -- the welder got
+    // "That didn't go through" AND lost every tick, the signature and the
+    // signer, and had to work the whole list again. A failure must leave the
+    // work in progress exactly where it was.
+    doWrite(st, function () {
       return WFQC.signOff(state.ctx.t, st.job, {
         stationId: st.station.id,
         phase: st.phase,
@@ -1677,7 +1843,9 @@
         signedBy: signer,
         worker: state.ctx.member
       });
-    }).then(function () { delete qcState[st.station.id]; });
+    })
+      .then(function () { delete qcState[st.station.id]; })
+      .catch(function () { /* dialog already shown; the checklist stays put */ });
   }
 
   function signedStamp(st, rec) {
@@ -1718,8 +1886,34 @@
   function doWrite(st, fn, opts) {
     opts = opts || {};
     var id = st.station.id;
-    if (busy[id]) return Promise.resolve();
-    busy[id] = true;
+
+    /* A DROPPED PRESS HAS TO SAY SO.
+     *
+     * The guard is right -- two writes to one station racing each other is how
+     * a job ends up on two benches. But it used to resolve silently, so a
+     * button press during an in-flight write closed its dialog and changed
+     * nothing, with no error and no clue. "Pause and switch does nothing" looks
+     * identical whether the switch failed or was never attempted, and it cost
+     * an afternoon to tell those apart.
+     *
+     * The stamp is the second half: a write that never settles (a hung REST
+     * call) would otherwise leave the flag set forever and every later press on
+     * that station would vanish into it for the rest of the session. After
+     * twenty seconds the station is assumed free rather than assumed stuck,
+     * because a shop that has to reload the page is worse than two writes.
+     */
+    if (busy[id] && Date.now() - busy[id] < 20000) {
+      if (!opts.quiet) {
+        O.dialog({
+          title: "One thing at a time",
+          note: "This station is still saving the last change. Give it a second " +
+                "and press again — nothing was lost.",
+          buttons: []
+        });
+      }
+      return Promise.resolve();
+    }
+    busy[id] = Date.now();
 
     return Promise.resolve()
       .then(fn)
