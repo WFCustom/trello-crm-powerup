@@ -297,6 +297,187 @@ test("nothing finishes a phase by calling complete() and stopping there", () => 
     "lib/qc.js is where complete() is allowed, because it moves the card after");
 });
 
+/* ============================================== the 4096-character ceiling */
+
+test("the limit is measured per scope, not per key", () => {
+  /* Trello's docs: "The size limit on the resulting stringified object is 4096
+   * characters PER SCOPE/VISIBILITY PAIR." Both earlier size checks in this
+   * codebase measured one key and passed while the scope around them was over
+   * — and lib/eos.js split its records across five keys specifically to dodge
+   * the cap, which bought nothing.
+   *
+   * This is the assertion that stops that idea coming back. */
+  const S = win.WFStore;
+  const scope = { a: "x".repeat(2000), b: "y".repeat(2000) };
+  const size = S.measure(scope);
+  assert.ok(size.chars > 4000, "the whole scope counts, not the larger key");
+  assert.ok(size.full, "and 2000 + 2000 is over, even though neither key is");
+  assert.equal(S.measure({ a: "x".repeat(100) }).full, false);
+});
+
+test("a refusal names the biggest thing, not just a number", async () => {
+  /* An error that only reports a number gets screenshotted and sent to me. The
+   * only useful refusal says what to delete. */
+  const store = { board: { qcTemplates: "x".repeat(3000), wfRoster: "y".repeat(900) } };
+  const t = {
+    get: (scope, vis, key) => Promise.resolve(
+      key === undefined ? store[scope] : store[scope][key]),
+    set: () => Promise.resolve()
+  };
+  await assert.rejects(
+    () => win.WFStore.set(t, "board", "wfStations", "z".repeat(500),
+      { label: "the station setup" }),
+    (e) => {
+      assert.equal(e.code, "WF_STORE_FULL");
+      assert.match(e.message, /the station setup/);
+      assert.match(e.message, /qcTemplates/, "names the largest thing stored");
+      assert.match(e.message, /Nothing was changed/);
+      return true;
+    });
+});
+
+test("making room is never refused, however full the scope is", async () => {
+  // The escape hatch a full scope depends on. If remove could be blocked by
+  // fullness there would be no way back from a full board at all.
+  const removed = [];
+  const t = {
+    get: () => Promise.resolve({}),
+    set: () => Promise.resolve(),
+    remove: (scope, vis, keys) => { removed.push(keys); return Promise.resolve(); }
+  };
+  await win.WFStore.remove(t, "board", ["eosRocks"]);
+  assert.deepEqual(removed[0], ["eosRocks"]);
+});
+
+test("a write that fits goes through and reports the room left", async () => {
+  const writes = [];
+  const t = {
+    get: () => Promise.resolve({ wfRoster: "y".repeat(200) }),
+    set: (scope, vis, patch) => { writes.push([scope, vis, patch]); return Promise.resolve(); }
+  };
+  const size = await win.WFStore.set(t, "board", "wfStations", { a: 1 },
+    { label: "the station setup" });
+  assert.equal(writes.length, 1);
+  // The object form, not four arguments: Trello's docs say several keys in one
+  // call is the only safe way, because separate calls clobber one another.
+  assert.deepEqual(writes[0][2], { wfStations: { a: 1 } });
+  assert.ok(size.free > 0);
+});
+
+test("the sandbox understands every call shape WFStore uses", async () => {
+  /* The shim only spoke the four-argument form. WFStore measures with a
+   * two-argument get and writes with an object — under the old shim the patch
+   * object would have been stored AS A KEY, so test mode would have recorded
+   * garbage and shown the operator a rehearsal unrelated to the live path. A
+   * sandbox whose fidelity depends on which overload you picked is worse than
+   * none, because people trust it. */
+  const w = load();
+  const real = {
+    get: (scope, vis, key, dflt) => Promise.resolve(
+      key === undefined ? { existing: 1 } : dflt),
+    set: () => Promise.reject(new Error("the sandbox must not write")),
+    remove: () => Promise.reject(new Error("the sandbox must not write"))
+  };
+  w.WFSandbox.enable();
+  const t = w.WFSandbox.wrap(real);
+
+  await t.set("board", "shared", { wfStations: { a: 1 }, wfRoster: { b: 2 } });
+  const all = await t.get("board", "shared");
+  assert.equal(all.existing, 1, "reads fall through to the real board");
+  assert.deepEqual(all.wfStations, { a: 1 }, "and see this session's writes");
+  assert.deepEqual(all.wfRoster, { b: 2 });
+
+  await t.remove("board", "shared", ["wfStations"]);
+  const after = await t.get("board", "shared");
+  assert.ok(!("wfStations" in after), "a removal is visible to the next read");
+  w.WFSandbox.disable();
+});
+
+/* ------------------------------------------------ the QC record's real size */
+
+test("a QC round stores verdicts, not another copy of the checklist", async () => {
+  /* THE ONE THAT WAS FAILING IN PRODUCTION. Every round carried the full text
+   * and tolerance of all ten checklist lines — text the record already holds
+   * once in `template`. Round two put the record at ~4,080 of a budget the
+   * card also shares with phaseWork and phaseLog; round three could not be
+   * written at all. A failed check, a correction and a re-check is three
+   * rounds, which is the ordinary path the fault path produces. */
+  // A genuine Assemble phase, because that is the checklist being pulled. The
+  // first work phase on the board is "Make Job Packet", so taking the default
+  // signed off a phase this test never mentions.
+  const env = benchEnv({ stage: "Assemble Legacy" });
+  const QC = env.w.WFQC;
+  const peer = { id: "p", username: "kevinmoss", fullName: "Kevin Moss" };
+
+  // The shipped Assemble list: ten lines, with real tolerances. No fallback --
+  // a checklistFor that started rejecting, or handing back a toy list, is the
+  // kind of break this test is here to notice rather than paper over.
+  const items = (await QC.checklistFor(env.t, { phase: "Assemble Legacy" })).items;
+  assert.ok(items.length >= 8, "using a realistically long list, not a toy one");
+  const checked = {};
+  items.forEach((_, i) => { checked[i] = true; });
+
+  for (let r = 0; r < 3; r++) {
+    await QC.signOff(env.t, env.meta, {
+      phase: env.stage.name, items, checked,
+      signature: "Kevin Moss", signedBy: peer, worker: env.worker
+    });
+  }
+
+  const rec = env.store["c1/qcRecord"];
+  assert.equal(rec.rounds.length, 3, "three rounds actually wrote");
+
+  const perRound = JSON.stringify(rec.rounds[0]).length;
+  assert.ok(perRound < 500,
+    "a round is verdicts and a signature, not a second copy of the list (was " +
+    perRound + " characters)");
+  const total = JSON.stringify(rec).length;
+  assert.ok(total < win.WFStore.MARGIN,
+    "and three rounds still fit inside the card's budget (" + total + ")");
+});
+
+test("a round written in the old shape still reads, forever", () => {
+  /* Every record already on the board carries `items` per round. Rewriting them
+   * would be a migration that could fail halfway on a live shop floor. Reading
+   * is shape-agnostic instead, so nothing ever has to be migrated. */
+  const QC = win.WFQC;
+  const old = {
+    template: ["ignored"],
+    rounds: [{ n: 1, items: [{ text: "Frame is square", spec: "1/8\"", result: "fail", note: "twisted" }] }]
+  };
+  const hydrated = QC.roundItems(old, old.rounds[0]);
+  assert.equal(hydrated[0].text, "Frame is square");
+  assert.equal(hydrated[0].result, "fail");
+  assert.equal(hydrated[0].note, "twisted");
+  assert.equal(QC.failedItems(old.rounds[0], old).length, 1);
+
+  const slim = {
+    template: [{ text: "Frame is square", spec: "diagonals within 1/8\"" },
+               { text: "All welds complete", spec: "" }],
+    rounds: [{ n: 1, results: ["fail", "pass"], notes: { 0: "twisted 3mm" } }]
+  };
+  const both = QC.roundItems(slim, slim.rounds[0]);
+  assert.equal(both.length, 2);
+  assert.equal(both[0].text, "Frame is square", "text comes from the template");
+  assert.equal(both[0].spec, "diagonals within 1/8\"", "and so does the tolerance");
+  assert.equal(both[0].note, "twisted 3mm");
+  assert.equal(both[1].result, "pass");
+  assert.equal(both[1].note, "", "no note where nobody wrote one");
+  assert.equal(QC.failedItems(slim.rounds[0], slim)[0].text, "Frame is square",
+    "a failed line is still nameable, which is what the QC comment prints");
+});
+
+test("notes are stored only where somebody wrote one", () => {
+  // An object full of empty strings is most of the saving thrown away.
+  const packed = win.WFQC.packRound([
+    { text: "a", result: "pass", note: "" },
+    { text: "b", result: "fail", note: "  " },
+    { text: "c", result: "fail", note: "porosity along the toe" }
+  ]);
+  assert.deepEqual(packed.results, ["pass", "fail", "fail"]);
+  assert.deepEqual(packed.notes, { 2: "porosity along the toe" });
+});
+
 /* ========================================================= retiring approvals */
 
 /** A window with REST stubbed for writes, plus a card carrying open phase work. */
@@ -311,17 +492,48 @@ function benchEnv(opts) {
     addMemberToCard: () => Promise.resolve({})
   });
   const store = {};
+  /* Speaks every shape the real API does, because WFStore uses more than one:
+   * a two-argument get to measure a whole scope, and an object to set several
+   * keys at once. A mock that only understood the four-argument form would make
+   * the guard look like it works while measuring an empty scope. */
   const t = {
     get: (scope, vis, key, dflt) => {
+      if (key === undefined) {
+        const all = {};
+        Object.keys(store).forEach((k) => {
+          const [s, ...rest] = k.split("/");
+          if (s === scope) all[rest.join("/")] = store[k];
+        });
+        return Promise.resolve(all);
+      }
       const v = store[scope + "/" + key];
       return Promise.resolve(v === undefined ? dflt : v);
     },
-    set: (scope, vis, key, value) => { store[scope + "/" + key] = value; return Promise.resolve(); },
-    remove: (scope, vis, key) => { delete store[scope + "/" + key]; return Promise.resolve(); }
+    set: (scope, vis, key, value) => {
+      if (key && typeof key === "object" && value === undefined) {
+        Object.keys(key).forEach((k) => { store[scope + "/" + k] = key[k]; });
+        return Promise.resolve();
+      }
+      store[scope + "/" + key] = value;
+      return Promise.resolve();
+    },
+    remove: (scope, vis, key) => {
+      [].concat(key).forEach((k) => { delete store[scope + "/" + k]; });
+      return Promise.resolve();
+    }
   };
   const boardId = Object.keys(w.WF_CONFIG.boards)[0];
   const cfg = w.WF_CONFIG.boards[boardId];
-  const stage = (cfg.stages || []).filter((s) => s.isWorkPhase)[0];
+  const work = (cfg.stages || []).filter((s) => s.isWorkPhase);
+  /* WHICH PHASE THE BENCH IS ON. Most tests here do not care and take the
+   * first work phase, which is "Make Job Packet". A test whose assertions name
+   * a phase -- pulling the Assemble checklist, say -- has to ask for that
+   * phase by name, or it quietly signs off a different one and reads as
+   * covering ground it never touched. */
+  const stage = opts.stage
+    ? work.find((s) => s.name === opts.stage)
+    : work[0];
+  if (!stage) throw new Error("no work phase named '" + opts.stage + "' in config.js");
   const meta = { id: "c1", idList: stage.listId, idBoard: boardId };
   const worker = { id: "w", username: "mike", fullName: "Mike Ross" };
 
@@ -409,7 +621,10 @@ test("signing at the bench after a self-check adds a round, it does not erase on
 
   const after = env.store["c1/qcRecord"];
   assert.equal(after.rounds.length, 2, "the self-check's round survived");
-  assert.equal(after.rounds[0].items[0].note, "seam needs grinding",
+  // A round stores verdicts by position and notes by index now, not a second
+  // copy of the lines; roundItems hydrates that back against rec.template and
+  // is the supported way to read one. The fact asserted is the same fact.
+  assert.equal(QC.roundItems(after, after.rounds[0])[0].note, "seam needs grinding",
     "including what was written on it");
   assert.equal(after.rounds[1].checkedBy.username, "kevinmoss");
   assert.equal(QC.modeOf(after), "floor");
@@ -502,42 +717,19 @@ test("a peer-checked phase records who vouched, not just who ticked", async () =
   /* The peer distinction used to live in a queue that nothing services any
    * more. It survives as the second name on the record, which is the only part
    * of a peer check that was ever worth anything. */
-  const w = load();
-  const store = {};
-  const moved = [];
-  w.WFRest = Object.assign({}, w.WFRest, {
-    moveCard: (t, id, list) => { moved.push(list); return Promise.resolve({}); },
-    postComment: () => Promise.resolve({}),
-    addMemberToCard: () => Promise.resolve({})
-  });
-  const t = {
-    get: (scope, vis, key, dflt) => {
-      const v = store[scope + "/" + key];
-      return Promise.resolve(v === undefined ? dflt : v);
-    },
-    set: (scope, vis, key, value) => {
-      store[scope + "/" + key] = value; return Promise.resolve();
-    },
-    remove: (scope, vis, key) => { delete store[scope + "/" + key]; return Promise.resolve(); }
-  };
-
-  const worker = { id: "w", username: "mike", fullName: "Mike Ross" };
+  // benchEnv's `t` already speaks the keyless get and the object set that
+  // WFStore needs; the hand-rolled one that used to sit here did not, so this
+  // test measured an empty scope and stored the patch under "undefined".
+  const env = benchEnv();
   const peer = { id: "p", username: "kevinmoss", fullName: "Kevin Moss" };
-  const cfg = w.WF_CONFIG.boards[Object.keys(w.WF_CONFIG.boards)[0]];
-  const stage = (cfg.stages || []).filter((s) => s.isWorkPhase)[0];
-  const meta = { id: "c1", idList: stage.listId, idBoard: Object.keys(w.WF_CONFIG.boards)[0] };
 
-  store["c1/phaseWork"] = {
-    listId: stage.listId, claimedBy: worker,
-    segments: [{ start: new Date(Date.now() - 3600000).toISOString(), end: null }]
-  };
-
-  await w.WFQC.submitSelfCheck(t, meta, stage.name, worker,
+  await env.w.WFQC.submitSelfCheck(env.t, env.meta, env.stage.name, env.worker,
     [{ text: "Work is complete and correct", result: "pass", note: "" }], peer);
 
-  const rec = store["c1/qcRecord"];
+  const rec = env.store["c1/qcRecord"];
   assert.equal(rec.status, "passed");
   assert.equal(rec.rounds[0].checkedBy.username, "mike", "who ticked the list");
   assert.equal(rec.passedBy.username, "kevinmoss", "who vouched for it");
-  assert.equal(store["c1/phaseWork"], undefined, "the phase is closed, not left waiting");
+  assert.equal(env.store["c1/phaseWork"], undefined,
+    "the phase is closed, not left waiting");
 });

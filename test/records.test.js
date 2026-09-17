@@ -60,6 +60,10 @@ function boot({ cards = [], safety = null, training = [], role = "manager" } = {
   const SAFETY = safety || { lists: [], cards: [], labels: [], members: [] };
 
   win.eval(read("config.js"));
+  // Every plugin-data write goes through WFStore, so it has to be here before
+  // anything that writes loads -- lib/records.js calls it by name and would
+  // throw a ReferenceError nothing catches. Same position ops.html gives it.
+  win.eval(read("lib/store.js"));
   win.eval(read("lib/board-extras.js"));
   win.eval(read("lib/stage.js"));
 
@@ -88,9 +92,30 @@ function boot({ cards = [], safety = null, training = [], role = "manager" } = {
   win.WFOps.tab = (d) => { if (d.id === "records") def = d; return realTab(d); };
   win.eval(read("popups/tabs/records.js"));
 
+  /* Speaks every shape the real Trello API does, because WFStore uses more
+   * than one: a KEYLESS get, because the 4096-character limit is per
+   * scope/visibility pair and the whole blob is the only thing worth
+   * measuring, and an OBJECT passed to set so several keys land in one call.
+   * Knowing only the four-argument form measured an empty scope and wrote the
+   * patch under the key "undefined". The store stays flat -- these fixtures
+   * only ever touch the board scope -- and `writes` still gets one SET per
+   * key, so the assertions that count writes are unchanged. */
   const t = {
-    get: (s, v, k, d) => Promise.resolve(store[k] === undefined ? d : store[k]),
-    set: (s, v, k, val) => { store[k] = val; writes.push(["SET", k, val]); return Promise.resolve(); }
+    get: (s, v, k, d) => {
+      if (k === undefined) return Promise.resolve(Object.assign({}, store));
+      return Promise.resolve(store[k] === undefined ? d : store[k]);
+    },
+    set: (s, v, k, val) => {
+      const patch = (k && typeof k === "object") ? k : { [k]: val };
+      Object.keys(patch).forEach((key) => {
+        store[key] = patch[key]; writes.push(["SET", key, patch[key]]);
+      });
+      return Promise.resolve();
+    },
+    remove: (s, v, k) => {
+      [].concat(k).forEach((key) => { delete store[key]; writes.push(["REMOVE", key, null]); });
+      return Promise.resolve();
+    }
   };
 
   const ctx = {
@@ -385,7 +410,20 @@ test("training gives sixty days of warning, which is what rebooking takes", () =
 test("a training record too big for Trello is refused with a readable message", async () => {
   const env = boot();
   const big = Array.from({ length: 300 }, (_, i) => ({ id: "t" + i, person: "x".repeat(30) }));
-  await assert.rejects(() => env.R.saveTraining(env.ctx.t, big), /too much/i);
+  /* The refusal now comes from WFStore, which measures the whole board scope
+   * rather than this one key, and it carries a code as well as a sentence.
+   * Assert on the code, because that is what callers branch on, and on the
+   * opening words, because a refusal nobody can read is the failure this test
+   * was written about. Not on the character count in the message: that moves
+   * every time anything else on the board is saved. */
+  await assert.rejects(() => env.R.saveTraining(env.ctx.t, big), (e) => {
+    assert.equal(e.code, "WF_STORE_FULL");
+    assert.match(e.message, /isn't room/i);
+    assert.match(e.message, /training records/, "and names what it could not save");
+    assert.match(e.message, /Nothing was changed/, "and says the save did not half-happen");
+    return true;
+  });
+  assert.equal(env.store.wfTraining.length, 0, "and nothing was written");
   await env.R.saveTraining(env.ctx.t, [{ id: "t1", person: "Kevin" }]);
   assert.equal(env.store.wfTraining.length, 1);
 });

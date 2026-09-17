@@ -1898,7 +1898,9 @@
      * Each line is drawn as what it says it is, for the same reason. */
     var round = (rec.rounds && rec.rounds.length)
       ? rec.rounds[rec.rounds.length - 1] : null;
-    ((round && round.items) || []).forEach(function (i) {
+    // Through WFQC, so a round stored as verdicts-by-position reads the same as
+    // one that carries its own text.
+    WFQC.roundItems(rec, round).forEach(function (i) {
       var passed = i.result !== "fail";
       box.appendChild(O.el("div.wf-fl-ck" + (passed ? ".is-on" : ""), null,
         O.el("span.wf-fl-box", { text: passed ? "✓" : "!" }),

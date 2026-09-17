@@ -21,23 +21,48 @@ const win = load();
 const R = win.WFRoster;
 const CFG = win.WF_CONFIG;
 
+/**
+ * A `t` that speaks every shape the real Trello API does.
+ *
+ * The roster goes through WFStore now, and WFStore uses two forms this mock
+ * previously did not know: a KEYLESS get, because the 4096-character limit is
+ * per scope/visibility pair and only the whole blob can be measured, and an
+ * OBJECT passed to set so several keys land in one call. Understanding only
+ * get(scope, vis, key, dflt) stored the patch under the key "undefined", which
+ * is exactly the silent write this file exists to catch -- `writes` still
+ * records one entry per key, so the scope assertion below is unchanged.
+ */
 function fakeT(seed) {
   const store = Object.assign({}, seed || {});
   const writes = [];
+  const scopeOf = (scope) => {
+    const all = {};
+    Object.keys(store).forEach((k) => {
+      const cut = k.indexOf("/");
+      if (k.slice(0, cut) === scope) all[k.slice(cut + 1)] = store[k];
+    });
+    return all;
+  };
   return {
     writes, store,
     get: (scope, vis, key, dflt) => {
+      if (key === undefined) return Promise.resolve(scopeOf(scope));
       const v = store[scope + "/" + key];
       return Promise.resolve(v === undefined ? dflt : v);
     },
     set: (scope, vis, key, value) => {
-      writes.push([scope, key, value]);
-      store[scope + "/" + key] = value;
+      const patch = (key && typeof key === "object") ? key : { [key]: value };
+      Object.keys(patch).forEach((k) => {
+        writes.push([scope, k, patch[k]]);
+        store[scope + "/" + k] = patch[k];
+      });
       return Promise.resolve();
     },
     remove: (scope, vis, key) => {
-      writes.push([scope, key, null]);
-      delete store[scope + "/" + key];
+      [].concat(key).forEach((k) => {
+        writes.push([scope, k, null]);
+        delete store[scope + "/" + k];
+      });
       return Promise.resolve();
     }
   };

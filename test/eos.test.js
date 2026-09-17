@@ -108,6 +108,10 @@ function boot({ role = "manager", records = {}, cards = CARDS, labels = LABELS }
   const store = Object.assign({}, records);
 
   win.eval(read("config.js"));
+  // Every plugin-data write goes through WFStore, so it has to be here before
+  // anything that writes loads -- lib/eos.js calls it by name and would throw
+  // a ReferenceError nothing catches. Same position ops.html gives it.
+  win.eval(read("lib/store.js"));
   win.eval(read("lib/board-extras.js"));
   win.eval(read("lib/stage.js"));
 
@@ -141,10 +145,27 @@ function boot({ role = "manager", records = {}, cards = CARDS, labels = LABELS }
   win.WFOps.tab = (d) => { def = d; return realTab(d); };
   win.eval(read("popups/tabs/eos.js"));
 
+  /* Speaks every shape the real Trello API does, because WFStore uses more
+   * than one: a KEYLESS get, because the 4096-character limit is per
+   * scope/visibility pair and the whole blob is the only thing worth
+   * measuring, and an OBJECT passed to set so several keys land in one call.
+   * Knowing only the four-argument form measured an empty scope and wrote the
+   * patch under the key "undefined". This store is flat, as it always was --
+   * these fixtures only ever touch the board scope. */
   const t = {
-    get: (scope, vis, key, dflt) =>
-      Promise.resolve(store[key] === undefined ? dflt : store[key]),
-    set: (scope, vis, key, value) => { store[key] = value; return Promise.resolve(); }
+    get: (scope, vis, key, dflt) => {
+      if (key === undefined) return Promise.resolve(Object.assign({}, store));
+      return Promise.resolve(store[key] === undefined ? dflt : store[key]);
+    },
+    set: (scope, vis, key, value) => {
+      const patch = (key && typeof key === "object") ? key : { [key]: value };
+      Object.keys(patch).forEach((k) => { store[k] = patch[k]; });
+      return Promise.resolve();
+    },
+    remove: (scope, vis, key) => {
+      [].concat(key).forEach((k) => { delete store[k]; });
+      return Promise.resolve();
+    }
   };
 
   const ctx = {
@@ -331,7 +352,20 @@ test("solving comments first, then moves -- never the other way round", async ()
 test("a record too big for Trello is refused with a readable message", async () => {
   const env = boot();
   const big = Array.from({ length: 400 }, (_, i) => ({ id: "r" + i, title: "x".repeat(20) }));
-  await assert.rejects(() => env.E.saveRecord(env.ctx.t, "rocks", big), /too much/i);
+  /* The refusal now comes from WFStore, which measures the whole board scope
+   * rather than this one key, and it carries a code as well as a sentence.
+   * Assert on the code, because that is the contract lib/eos.js's callers
+   * branch on, and on the opening words, because a refusal nobody can read is
+   * the failure this test was written about. Not on the character count: that
+   * moves every time anything else on the board is saved. */
+  await assert.rejects(() => env.E.saveRecord(env.ctx.t, "rocks", big), (e) => {
+    assert.equal(e.code, "WF_STORE_FULL");
+    assert.match(e.message, /isn't room/i);
+    assert.match(e.message, /rocks/, "and names what it could not save");
+    assert.match(e.message, /Nothing was changed/, "and says the save did not half-happen");
+    return true;
+  });
+  assert.equal(env.store.eosRocks, undefined, "and nothing was written");
   await env.E.saveRecord(env.ctx.t, "rocks", [{ id: "r1", title: "fine" }]);
   assert.equal(env.store.eosRocks.length, 1);
 });

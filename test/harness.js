@@ -37,6 +37,7 @@ const ROOT = path.join(__dirname, "..");
 const LOAD_ORDER = [
   "config.js",
   "lib/sandbox.js",
+  "lib/store.js",
   "lib/board-extras.js",
   "lib/stage.js",
   "lib/trello-rest.js",

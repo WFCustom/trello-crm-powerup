@@ -80,6 +80,10 @@ function boot({ role = "worker", cards = [], saved = null } = {}) {
   const written = [];
 
   win.eval(read("config.js"));
+  // Every plugin-data write goes through WFStore, and the Floor writes: it has
+  // to be here before lib/qc.js and lib/tables.js, which call it by name and
+  // would throw a ReferenceError nothing catches. Same position ops.html uses.
+  win.eval(read("lib/store.js"));
   win.eval(read("lib/board-extras.js"));
   win.eval(read("lib/stage.js"));
   // getCardDetail is what the cover image rides on. Returning a card with an
@@ -113,11 +117,32 @@ function boot({ role = "worker", cards = [], saved = null } = {}) {
   win.WFOps.tab = (d) => { def = d; return realTab(d); };
   win.eval(read("popups/tabs/floor.js"));
 
+  /* Speaks every shape the real Trello API does, because WFStore uses more
+   * than one: a KEYLESS get, because the 4096-character limit is per
+   * scope/visibility pair and the whole blob is the only thing worth
+   * measuring, and an OBJECT passed to set so several keys land in one call.
+   * Knowing only the four-argument form measured an empty scope and wrote the
+   * patch under the key "undefined".
+   *
+   * The store is flat and always has been -- it ignores scope, so a keyless
+   * get hands back board and card keys together. That over-counts, which can
+   * only make the size guard stricter here, never more permissive. `written`
+   * still records one entry per key, so every count below is unchanged. */
   const t = {
-    get: (scope, vis, key, dflt) =>
-      Promise.resolve(store[key] === undefined ? dflt : store[key]),
+    get: (scope, vis, key, dflt) => {
+      if (key === undefined) return Promise.resolve(Object.assign({}, store));
+      return Promise.resolve(store[key] === undefined ? dflt : store[key]);
+    },
     set: (scope, vis, key, value) => {
-      written.push([key, value]); store[key] = value; return Promise.resolve();
+      const patch = (key && typeof key === "object") ? key : { [key]: value };
+      Object.keys(patch).forEach((k) => {
+        written.push([k, patch[k]]); store[k] = patch[k];
+      });
+      return Promise.resolve();
+    },
+    remove: (scope, vis, key) => {
+      [].concat(key).forEach((k) => { written.push([k, null]); delete store[k]; });
+      return Promise.resolve();
     }
   };
 

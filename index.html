@@ -37,13 +37,23 @@
     advance; advance after phase.js, because it wraps what phase.js defines.
   -->
   <script src="https://p.trellocdn.com/power-up.min.js"></script>
-  <script src="./config.js?v=20260917a"></script>
-  <script src="./lib/board-extras.js?v=20260917a"></script>
-  <script src="./lib/stage.js?v=20260917a"></script>
-  <script src="./lib/trello-rest.js?v=20260917a"></script>
-  <script src="./lib/phase.js?v=20260917a"></script>
-  <script src="./lib/jobtype.js?v=20260917a"></script>
-  <script src="./lib/advance.js?v=20260917a"></script>
-  <script src="./connector.js?v=20260917a"></script>
+  <script src="./config.js?v=20260917b"></script>
+  <!--
+    store.js, or lib/phase.js falls back to trimming the phase log to 30
+    entries here. Thirty entries is roughly 11,000 characters against a card
+    budget of 4,096, so a well-travelled job would overflow and the hand-off
+    would fail with it. The guard in advance() is written to degrade rather
+    than crash when WFStore is absent — which means a missing script tag is
+    silent, and this comment is the only thing standing between that and a
+    repeat of the bug this file was added to fix.
+  -->
+  <script src="./lib/store.js?v=20260917b"></script>
+  <script src="./lib/board-extras.js?v=20260917b"></script>
+  <script src="./lib/stage.js?v=20260917b"></script>
+  <script src="./lib/trello-rest.js?v=20260917b"></script>
+  <script src="./lib/phase.js?v=20260917b"></script>
+  <script src="./lib/jobtype.js?v=20260917b"></script>
+  <script src="./lib/advance.js?v=20260917b"></script>
+  <script src="./connector.js?v=20260917b"></script>
 </body>
 </html>

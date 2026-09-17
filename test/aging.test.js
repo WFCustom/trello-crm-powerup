@@ -80,6 +80,11 @@ function boot({ cards = [], actions = [], fields = [], audit = [] } = {}) {
   const calls = [];
 
   win.eval(read("config.js"));
+  // Every plugin-data write goes through WFStore. Nothing this suite drives
+  // writes today, but the card panel it loads shares its code with screens
+  // that do, and a missing WFStore is a ReferenceError nothing catches --
+  // loaded in the position ops.html gives it, so the two stay in step.
+  win.eval(read("lib/store.js"));
   win.eval(read("lib/board-extras.js"));
   win.eval(read("lib/stage.js"));
 

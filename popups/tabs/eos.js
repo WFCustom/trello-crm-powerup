@@ -1204,7 +1204,23 @@
     wrap.appendChild(O.el("div.wf-eos-scroll", null, table));
 
     if (mayEdit) {
-      var size = WFEOS.recordSize(rows);
+      /* The warning is about the BOARD, not this record.
+       *
+       * It used to measure the scorecard alone against 3,800 characters, which
+       * is not the limit -- every board-scoped key shares one 4,096-character
+       * budget. So the scorecard could read "42% full" while the board had no
+       * room left at all, and saving failed anyway.
+       *
+       * Filled in asynchronously because the honest answer needs a read. The
+       * tag simply doesn't appear until it resolves, which is the right way
+       * round: a missing warning is better than a wrong reassurance. */
+      var sizeTag = O.el("span");
+      WFStore.usage(state.ctx.t, "board").then(function (size) {
+        if (!size.warn || !sizeTag.isConnected) return;
+        sizeTag.appendChild(O.tag("board storage " + size.pct + "% full",
+          size.full ? "late" : "warn"));
+      }).catch(function () { /* a gauge that fails is not worth an error */ });
+
       var foot = O.el("div", { style: "display:flex;gap:8px;align-items:center;margin-top:13px;flex-wrap:wrap" },
         O.btn("Save the numbers", {
           primary: true, busyText: "Saving…",
@@ -1224,10 +1240,8 @@
             return persist("scorecard", WFEOS.trimWeeks(next, 26));
           }
         }),
-        O.el("div.muted", { style: "font-size:12px", text: "Type across a row, then save once." }));
-      if (size.pct > 70) {
-        foot.appendChild(O.tag("record " + size.pct + "% full", size.pct > 90 ? "late" : "warn"));
-      }
+        O.el("div.muted", { style: "font-size:12px", text: "Type across a row, then save once." }),
+        sizeTag);
       wrap.appendChild(foot);
 
       var edit = O.el("div", { style: "margin-top:16px;display:flex;gap:7px;flex-wrap:wrap" });

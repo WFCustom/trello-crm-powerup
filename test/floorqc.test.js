@@ -32,23 +32,48 @@ const ITEMS = [
 
 const allChecked = { 0: true, 1: true };
 
+/**
+ * A `t` that speaks every shape the real Trello API does.
+ *
+ * WFStore uses more than one: a KEYLESS get, because the 4096-character limit
+ * is per scope/visibility pair and the only way to measure it is to read the
+ * whole blob, and an OBJECT passed to set, because two separate set calls
+ * read-modify-write the same blob and the second discards the first. A mock
+ * that only understood get(scope, vis, key, dflt) would hand WFStore an empty
+ * scope to measure and then store the patch object under the key "undefined" --
+ * so the guard would look like it works while checking nothing.
+ */
 function fakeT(seed) {
   const store = Object.assign({}, seed || {});
   const writes = [];
+  const scopeOf = (scope) => {
+    const all = {};
+    Object.keys(store).forEach((k) => {
+      const cut = k.indexOf("/");
+      if (k.slice(0, cut) === scope) all[k.slice(cut + 1)] = store[k];
+    });
+    return all;
+  };
   return {
     writes, store,
     get: (scope, vis, key, dflt) => {
+      if (key === undefined) return Promise.resolve(scopeOf(scope));
       const v = store[scope + "/" + key];
       return Promise.resolve(v === undefined ? dflt : v);
     },
     set: (scope, vis, key, value) => {
-      writes.push([scope, key, value]);
-      store[scope + "/" + key] = value;
+      const patch = (key && typeof key === "object") ? key : { [key]: value };
+      Object.keys(patch).forEach((k) => {
+        writes.push([scope, k, patch[k]]);
+        store[scope + "/" + k] = patch[k];
+      });
       return Promise.resolve();
     },
     remove: (scope, vis, key) => {
-      writes.push([scope, key, null]);
-      delete store[scope + "/" + key];
+      [].concat(key).forEach((k) => {
+        writes.push([scope, k, null]);
+        delete store[scope + "/" + k];
+      });
       return Promise.resolve();
     }
   };
@@ -249,8 +274,15 @@ test("the signed record keeps the tolerances, not just the ticks", async () => {
     signature: "Kevin Moss", signedBy: SCOTT, worker: KEV
   });
   // Editing the station's list later must not rewrite what was attested to.
-  assert.equal(out.rec.rounds[0].items[0].spec, "Diagonals within 1/8″");
-  assert.ok(out.rec.rounds[0].items.every((i) => i.result === "pass"));
+  //
+  // A round no longer carries its own copy of the lines -- it stores verdicts
+  // by position and the text and tolerance live once on rec.template, so the
+  // round is ~300 characters instead of ~1,540. roundItems hydrates that back
+  // into {text, spec, result, note}, and is the only supported way to read a
+  // round; the assertion is about what was attested to either way.
+  const lines = QC.roundItems(out.rec, out.rec.rounds[0]);
+  assert.equal(lines[0].spec, "Diagonals within 1/8″");
+  assert.ok(lines.every((i) => i.result === "pass"));
 });
 
 test("signing signs, and does NOT ship the job", async () => {

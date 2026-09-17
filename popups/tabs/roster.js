@@ -22,6 +22,103 @@
     worker: "Own queue only: claim, timer, complete. No financials"
   };
 
+  /**
+   * What the board is actually storing, and how close that is to the ceiling.
+   *
+   * WHY THIS SCREEN EXISTS
+   *
+   * Trello gives a Power-Up 4,096 characters per scope. Every board-level
+   * setting shares one of those: the roster, the permissions, the station
+   * setup, the checklist library, all five EOS records. Nothing said so, so the
+   * first anyone knew was a save that refused — or, before the guarded write
+   * path, one that quietly did nothing.
+   *
+   * It is deliberately a plain list of the biggest things first, because the
+   * only useful response to "this is nearly full" is knowing what to remove.
+   * A bar on its own is an alarm; a bar next to "qcTemplates: 2,140 characters"
+   * is an instruction.
+   *
+   * It also answers a question estimates cannot: how much this shop actually
+   * stores. A month of watching this beats any calculation of mine about where
+   * the records should eventually live.
+   */
+  function buildStorage(ctx) {
+    var wrap = O.el("div");
+    wrap.appendChild(O.el("p.muted", { style: "margin:0 0 14px", text:
+      "Trello allows this Power-Up " + WFStore.LIMIT + " characters of settings per " +
+      "board, shared across everything below. Job records live on their own " +
+      "cards and do not count against this." }));
+
+    var body = O.el("div", null, O.el("div.loading", { text: "Measuring…" }));
+    wrap.appendChild(body);
+
+    WFStore.usage(ctx.t, "board").then(function (size) {
+      body.innerHTML = "";
+
+      var bar = O.el("div", {
+        style: "height:12px;border-radius:999px;background:var(--wf-band);overflow:hidden;margin:4px 0 6px"
+      }, O.el("i", {
+        style: "display:block;height:100%;border-radius:999px;width:" +
+          Math.min(100, size.pct) + "%;background:" +
+          (size.full ? "#d9482e" : size.warn ? "#e8a317" : "#1f9d63")
+      }));
+
+      var panel = O.panel("Board settings storage", WFStore.describe(size));
+      panel.body(O.el("div", null, bar,
+        O.el("div.wf-sub", { text: size.chars + " of " + WFStore.MARGIN +
+          " characters used · " + size.free + " left" }),
+        size.warn
+          ? O.el("div.wf-callout", { style: "margin-top:12px" },
+              O.el("div.wf-callout-k", { text: size.full ? "Full" : "Getting close" }),
+              O.el("div", { text: size.full
+                ? "New settings will be refused until something below is removed. " +
+                  "Nothing already saved has been lost."
+                : "Still saving fine. Worth thinning the largest item below before " +
+                  "it becomes urgent." }))
+          : null));
+      body.appendChild(panel);
+
+      if (!size.byKey.length) {
+        body.appendChild(O.empty("Nothing stored on this board yet."));
+        return;
+      }
+
+      var rows = O.el("div.wf-cards", { style: "margin-top:16px" });
+      size.byKey.forEach(function (k) {
+        var share = Math.round((k.chars / Math.max(1, size.chars)) * 100);
+        rows.appendChild(O.el("div.wf-card", { style: "grid-template-columns:1.6fr 1fr auto" },
+          O.el("div", null,
+            O.el("div.wf-card-t", { text: FRIENDLY[k.key] || k.key }),
+            O.el("div.wf-card-s", { text: k.key })),
+          O.el("div.wf-sub", { text: share + "% of what's used" }),
+          O.el("div.wf-sub", { text: k.chars + " chars" })));
+      });
+      body.appendChild(rows);
+    }).catch(function (e) {
+      body.innerHTML = "";
+      body.appendChild(O.empty("Couldn't measure storage: " +
+        ((e && e.message) || "unknown error")));
+    });
+
+    return wrap;
+  }
+
+  /** Plain names, because a key like wfQcChecklists means nothing to a manager. */
+  var FRIENDLY = {
+    wfRoster: "The roster — who's a manager, who does which phase",
+    wfPermissions: "Access groups and per-person permissions",
+    wfStations: "Station setup for the shop floor",
+    qcTemplates: "The checklist library",
+    wfQcChecklists: "Old per-station checklists (no longer written to)",
+    wfTraining: "Training tickets and expiry dates",
+    wfTabOrder: "The board's default tab order",
+    eosVto: "EOS — vision and traction",
+    eosRocks: "EOS — rocks",
+    eosScorecard: "EOS — scorecard",
+    eosSeats: "EOS — accountability chart",
+    eosProcesses: "EOS — core processes"
+  };
+
   function roleControls(ctx, m, role) {
     var acts = [];
     if (role !== "manager") {
@@ -558,6 +655,9 @@
         qcPhases.forEach(function (p) { phaseNames[p.name] = true; });
         var extras = Object.keys(qcTemplates).filter(function (n) { return !phaseNames[n]; }).sort();
 
+        /* Named here so the SECTIONS entry below stays one line. */
+        function storageBlock(c) { return buildStorage(c); }
+
         /* ================================================== the sections
          *
          * Four things live here and only two of them are about people. Stacked
@@ -629,6 +729,23 @@
             id: "access", label: "Access",
             count: WFPerms.presetIds(ctx.perms).length + " groups",
             build: function () { return accessBlock(ctx, ctx.perms, members); }
+          });
+        }
+
+        /* Storage, for whoever would have to deal with it being full.
+         *
+         * Everything the board stores -- the roster, the permissions, the
+         * station setup, the checklist library, the EOS records -- shares one
+         * 4,096-character budget, and until now nothing said so. The first
+         * anybody knew was a save that refused, or worse, one that didn't. A
+         * gauge turns an invisible cliff into a number somebody can watch, and
+         * it is the honest way to find out what this shop's real data volume
+         * is rather than estimating it. */
+        if (ctx.isManager) {
+          SECTIONS.push({
+            id: "storage", label: "Storage",
+            count: "board limits",
+            build: function () { return storageBlock(ctx); }
           });
         }
 
