@@ -271,6 +271,26 @@ test("every locally served asset carries a version token", () => {
     "the tokens on the static tags match the one the scripts are written with");
 });
 
+test("the only surface that loads lib/qc.js also loads lib/steps.js", () => {
+  /* THE SPLIT-PHASE GUARDS FAIL OPEN WITHOUT IT, AND ONE OF THEM FAILS SILENTLY.
+   *
+   * submitSelfCheck refuses a split phase behind `global.WFSteps && ...` -- a
+   * short-circuit, so with steps.js absent the test reads false and My jobs
+   * walks a finishing job straight past the powder booth again, with nothing
+   * anywhere reporting a problem. passSigned reads the same global for the
+   * hand-off decision. popups/tabs/floor.js names WFSteps BARE, which at least
+   * throws, but a guard whose correctness depends on a script tag somebody
+   * else maintains needs the script tag asserted. */
+  const ops = read("popups/ops.html");
+  const qcSurfaces = ["index.html", "popups/card-back.html", "popups/ops.html"]
+    .filter((f) => read(f).includes("lib/qc.js"));
+  assert.deepEqual(qcSurfaces, ["popups/ops.html"],
+    "if another surface starts loading lib/qc.js it needs lib/steps.js too");
+  assert.ok(ops.includes("lib/steps.js"),
+    "ops.html loads lib/steps.js, so isSplit() is a real guard rather than a " +
+    "short-circuit that is always false");
+});
+
 /* ============================================ finishing a phase always works */
 
 test("nothing finishes a phase by calling complete() and stopping there", () => {
@@ -290,11 +310,20 @@ test("nothing finishes a phase by calling complete() and stopping there", () => 
         file + " must finish a phase through WFChecklist or WFQC, which advance it");
     });
 
-  // And the two that DO call it pair it with an advance in the same chain.
+  /* And the three in lib/qc.js each pair it with something that un-strands the
+   * card. Two advance (passSigned's last-step branch, submitSelfCheck). The
+   * third is the blast-booth hand-off, which deliberately does NOT move the
+   * card -- there is nowhere to move to -- so what has to be true of it is the
+   * other half of the rule: it REMOVES phaseWork. Left in place, complete()'s
+   * completedAt makes WFPhase.isFinished true, the job drops off the station
+   * and lands in "Waiting on a manager" with no manager coming: the exact
+   * stranding this test is named for, arriving by a new route. */
   const qc = code("lib/qc.js");
-  assert.equal((qc.match(/WFPhase\.complete\s*\(/g) || []).length, 2);
+  assert.equal((qc.match(/WFPhase\.complete\s*\(/g) || []).length, 3);
   assert.ok(/WFPhase\.advance\s*\(/.test(qc) && /approveAndAdvance\s*\(/.test(qc),
     "lib/qc.js is where complete() is allowed, because it moves the card after");
+  assert.match(qc, /t\.remove\s*\(\s*cardMeta\.id\s*,\s*"shared"\s*,\s*"phaseWork"\s*\)/,
+    "and the hand-off that does not move the card clears the phase work instead");
 });
 
 /* ============================================== the 4096-character ceiling */
@@ -545,6 +574,421 @@ function benchEnv(opts) {
   };
   return { w, t, store, meta, stage, worker, moved, comments };
 }
+
+/* ============================== two benches behind one Trello column */
+
+const S = win.WFSteps;
+const FINISH = "Sandblast / Powder Coat";
+
+test("the blast booth and the powder booth do not share one queue", () => {
+  /* THE BUG THIS EXISTS FOR. Both benches pull the same Trello list, because
+   * that is the only list there is. Without a step filter every job appeared in
+   * both queues at once and neither bench could tell which were its own. */
+  const cfg = { stages: [{ listId: "LS", name: FINISH, order: 9, isWorkPhase: true }] };
+  const mk = (id, labels) => ({
+    id, name: "#" + id + " job", idList: "LS", pos: 100, due: null,
+    phaseWork: null, labelNames: labels || []
+  });
+  const blastBooth = { id: "f1", area: "finishing", table: "Blast booth",
+                       type: "blast", phase: FINISH };
+  const powderBooth = { id: "f2", area: "finishing", table: "Powder booth",
+                        type: "powder", phase: FINISH };
+
+  const cards = [mk("RAW"), mk("DONE", ["Blasted"])];
+
+  const blast = T.stationState(cfg, cards, blastBooth);
+  const powder = T.stationState(cfg, cards, powderBooth);
+
+  assert.deepEqual(blast.queue.map((c) => c.id), ["RAW"],
+    "an unblasted job is the blast booth's");
+  assert.deepEqual(powder.queue.map((c) => c.id), ["DONE"],
+    "and a blasted one is the powder booth's — same column, different bench");
+});
+
+test("a card nobody attached labelNames to is at the FIRST step, not at none", () => {
+  /* THE ASYMMETRY THIS GUARDS. `labelNames` is a joined field: card.idLabels
+   * carries ids, the names live on the board, and exactly one file does the
+   * join -- popups/ops.js, in cards(). Every other caller of stationState hands
+   * over raw cards: the live-board smoke test, any tab that builds a fixture,
+   * and every test in this repo written before the split existed.
+   *
+   * A missing join must therefore fail towards the FIRST step, which is where
+   * unstarted work actually is. Failing the other way -- treating "no labels
+   * known" as "belongs to no step" -- would empty both finishing queues at once
+   * and report nothing: the blast booth would show "Open · assign a job" with
+   * eleven jobs sitting in the column behind it.
+   *
+   * ops.js already degrades this way on purpose (a failed getBoardLabels falls
+   * back to []), so this is the assertion that keeps that fallback meaningful. */
+  const cfg = { stages: [{ listId: "LS", name: FINISH, order: 9, isWorkPhase: true }] };
+  // No labelNames property at all -- not an empty array, absent.
+  const bare = { id: "RAW", name: "#RAW job", idList: "LS", pos: 100, due: null,
+                 phaseWork: null };
+  assert.ok(!("labelNames" in bare), "the fixture really is missing the field");
+
+  const blast = T.stationState(cfg, [bare],
+    { id: "f1", area: "finishing", table: "Blast booth", type: "blast", phase: FINISH });
+  const powder = T.stationState(cfg, [bare],
+    { id: "f2", area: "finishing", table: "Powder booth", type: "powder", phase: FINISH });
+
+  assert.deepEqual(blast.queue.map((c) => c.id), ["RAW"],
+    "an unjoined card lands in the blast booth, which is where unblasted work is");
+  assert.deepEqual(powder.queue.map((c) => c.id), [],
+    "and not in both booths at once, which is the bug the split exists to fix");
+
+  // The same rule stated at the layer that decides it, so a reader does not
+  // have to infer it from a queue.
+  assert.equal(S.stepFor(FINISH, undefined).step.id, "blast");
+  assert.equal(S.stepFor(FINISH, null).step.id, "blast");
+  assert.equal(S.namesOn({}, undefined).length, 0,
+    "a card with no idLabels joins to no names rather than throwing");
+});
+
+test("a phase with no steps is untouched by any of this", () => {
+  // Every welding bench, and every other phase on the board. The split must be
+  // invisible to them or it is a change to the whole shop, not to one bay.
+  const cfg = { stages: [{ listId: "LA", name: "Assemble Legacy", order: 8, isWorkPhase: true }] };
+  const cards = [{ id: "A", name: "#A", idList: "LA", pos: 1, phaseWork: null, labelNames: ["Blasted"] }];
+  const st = T.stationState(cfg, cards, STATION);
+  assert.equal(st.queue.length, 1,
+    "an unrelated label does not remove a job from a welding queue");
+  assert.equal(S.stepsFor("Assemble Legacy").length, 0);
+});
+
+test("a job's step is read off its labels, and the last step needs none", () => {
+  /* N steps need N-1 labels: finishing the last one moves the card, so its
+   * position inside the column stops being a question. Blast then powder needs
+   * exactly one label. */
+  assert.equal(S.stepFor(FINISH, []).step.id, "blast");
+  assert.equal(S.stepFor(FINISH, []).last, false);
+  assert.equal(S.stepFor(FINISH, ["Blasted"]).step.id, "powder");
+  assert.equal(S.stepFor(FINISH, ["Blasted"]).last, true);
+  assert.equal(S.stepFor(FINISH, ["blasted"]).step.id, "powder",
+    "matched case-insensitively, because a person may have made the label by hand");
+  assert.deepEqual(S.labelNames(), ["Blasted"],
+    "one step, one label — the powder step carries none");
+  assert.equal(S.stepFor("Assemble Legacy", []), null);
+});
+
+test("finishing blast hands the job over without moving the card", async () => {
+  /* The whole point. Advancing here would carry the job out of finishing
+   * altogether, past the powder coat nobody had done. */
+  const env = benchEnv({ stage: FINISH });
+  const QC = env.w.WFQC;
+  const peer = { id: "p", username: "kevinmoss", fullName: "Kevin Moss" };
+  const labels = [];
+  env.w.WFRest = Object.assign({}, env.w.WFRest, {
+    getBoardLabels: () => Promise.resolve([]),
+    createLabel: (t, b, name) => Promise.resolve({ id: "lbl1", name: name }),
+    addLabelToCard: (t, cardId, id) => { labels.push(id); return Promise.resolve({}); },
+    removeLabelFromCard: () => Promise.resolve({}),
+    moveCard: (t, id, list) => { env.moved.push(list); return Promise.resolve({}); },
+    postComment: () => Promise.resolve({})
+  });
+
+  await QC.signOff(env.t, env.meta, {
+    phase: FINISH, items: [{ text: "Profile fully stripped", spec: "" }],
+    checked: { 0: true }, signature: "Kevin Moss", signedBy: peer, worker: env.worker
+  });
+
+  const res = await QC.passSigned(env.t, env.meta,
+    { idList: env.meta.idList, qcRecord: env.store["c1/qcRecord"] },
+    { phase: FINISH, stationType: "blast" });
+
+  assert.equal(env.moved.length, 0, "the card did not move — there is nowhere to move to");
+  assert.equal(res.movedTo, null);
+  assert.equal(res.handedTo.id, "powder", "it belongs to the powder booth now");
+  assert.deepEqual(labels, ["lbl1"], "and the board shows it, via the label");
+  assert.equal(env.store["c1/phaseWork"], undefined,
+    "the blast booth's phase work is closed out");
+
+  /* AND THE HOURS ARE LOGGED, WHICH THIS TEST USED TO ASSERT THE OPPOSITE OF.
+   *
+   * The original reasoning was that one entry per step would double-count the
+   * phase. It does not: removing phaseWork DESTROYS the blast booth's segments,
+   * and the powder booth then starts its own, so the single entry advance()
+   * would eventually write covers powder alone. Every hour of blasting the shop
+   * has ever done was missing from timeEntries and from costing. Each step logs
+   * its own; two entries for one phase is right, because two people worked it. */
+  const log = env.store["c1/phaseLog"];
+  assert.equal(log.length, 1, "the blast booth's hours are on the card, not gone");
+  assert.equal(log[0].listName, FINISH,
+    "logged under the PHASE, so lib/costing.js buckets it into Sand & Powder " +
+    "rather than filing 'Sandblast' as Unassigned");
+  assert.equal(log[0].step, "Sandblast", "with the bench named alongside");
+  assert.equal(log[0].durationMinutes, 60, "the real minutes, not zero");
+  assert.ok(log[0].completedAt, "complete() ran first, so the entry is closed out");
+  assert.equal(log[0].approvedBy.username, "kevinmoss", "credited to whoever signed");
+});
+
+test("both benches' hours survive, and the phase log names which bench did which", async () => {
+  /* FIX 2, END TO END. Blast signs off and hands over; powder starts fresh,
+   * signs off and ships the card. Two entries, one phase, two benches. */
+  const env = benchEnv({ stage: FINISH });
+  const QC = env.w.WFQC;
+  const blastGuy = { id: "b", username: "kevinmoss", fullName: "Kevin Moss" };
+  const powderGuy = { id: "d", username: "dsmith", fullName: "Dave Smith" };
+  env.w.WFRest = Object.assign({}, env.w.WFRest, {
+    getBoardLabels: () => Promise.resolve([{ id: "lbl1", name: "Blasted" }]),
+    createLabel: () => Promise.resolve({ id: "lbl1", name: "Blasted" }),
+    addLabelToCard: () => Promise.resolve({}),
+    removeLabelFromCard: () => Promise.resolve({}),
+    moveCard: (t, id, list) => { env.moved.push(list); return Promise.resolve({}); },
+    postComment: () => Promise.resolve({})
+  });
+
+  // ---- the blast booth
+  await QC.signOff(env.t, env.meta, {
+    phase: FINISH, stepId: "blast", items: [{ text: "Profile fully stripped", spec: "" }],
+    checked: { 0: true }, signature: "Kevin Moss", signedBy: blastGuy, worker: env.worker
+  });
+  await QC.passSigned(env.t, env.meta,
+    { id: "c1", idList: env.meta.idList, qcRecord: env.store["c1/qcRecord"] },
+    { phase: FINISH, stepId: "blast" });
+  assert.equal(env.moved.length, 0, "the card has not left finishing");
+
+  // ---- the powder booth, on its own clock. The blast booth's segments are
+  // gone with its phaseWork, which is exactly why the entry above had to exist.
+  env.store["c1/phaseWork"] = {
+    listId: env.meta.idList,
+    claimedBy: powderGuy,
+    segments: [{ start: new Date(Date.now() - 1800000).toISOString(), end: null }],
+    percentComplete: 90
+  };
+  await QC.signOff(env.t, env.meta, {
+    phase: FINISH, stepId: "powder", items: [{ text: "Coverage even", spec: "" }],
+    checked: { 0: true }, signature: "Dave Smith", signedBy: powderGuy, worker: powderGuy
+  });
+  await QC.passSigned(env.t, env.meta,
+    { id: "c1", idList: env.meta.idList, idLabels: ["lbl1"],
+      qcRecord: env.store["c1/qcRecord"] },
+    { phase: FINISH, stepId: "powder", boardLabels: [{ id: "lbl1", name: "Blasted" }] });
+  assert.equal(env.moved.length, 1, "the last step is the real hand-off");
+
+  const log = env.store["c1/phaseLog"];
+  assert.equal(log.length, 2, "two entries, because two people worked this phase");
+  assert.deepEqual(log.map((e) => e.listName), [FINISH, FINISH],
+    "both filed under the phase, so costing buckets them together");
+  assert.deepEqual(log.map((e) => e.step), ["Sandblast", "Powder coat"],
+    "and each says which bench");
+  assert.deepEqual(log.map((e) => e.durationMinutes), [60, 30]);
+
+  // The archive is the point of all of it.
+  const entries = env.w.WFRecords.timeEntries([
+    { id: "c1", name: "#1234 Handrail", phaseLog: log }
+  ]);
+  assert.equal(entries.length, 2);
+  assert.deepEqual(entries.map((e) => e.minutes).sort((a, b) => a - b), [30, 60],
+    "both sets of minutes reach the records tab");
+  assert.deepEqual(entries.map((e) => e.phase), [FINISH, FINISH]);
+  assert.deepEqual(entries.map((e) => e.who).sort(), ["Dave Smith", "Mike Ross"]);
+
+  // And costing does not choke on the extra `step` field, nor file either
+  // entry as Unassigned -- which is exactly what would happen if the entries
+  // had been logged under the STEP name instead of the phase name.
+  const rows = env.w.WFCosting.buildJobRows([{
+    id: "c1", name: "#1234 Handrail", idList: env.meta.idList,
+    phaseLog: log, economics: { value: 10000 }
+  }], null, {});
+  const job = rows[0];
+  assert.equal(job.unassigned.hours, 0,
+    "neither entry lands in Unassigned — the phase name is what costing buckets on");
+  assert.equal(job.allocation["Sand & Powder"].hours, 1.5,
+    "both benches roll into Sand & Powder: 60 + 30 minutes");
+  assert.equal(job.allocation["Sand & Powder"].entries === undefined, true,
+    "the extra `step` field is simply ignored, not tripped over");
+  assert.equal(Math.round(job.productionHours * 60), 90,
+    "and all 90 minutes are counted once each, not double-counted");
+});
+
+test("the step's entry survives the trimming path, and says what it cost", async () => {
+  /* appendLog trims from the FRONT until the write fits, and must never drop
+   * the entry it was just called to record -- which on this path is the only
+   * copy of the blast booth's hours in existence, because passSigned deletes
+   * phaseWork a moment later. */
+  const env = benchEnv({ stage: FINISH });
+  const QC = env.w.WFQC;
+  const peer = { id: "p", username: "kevinmoss", fullName: "Kevin Moss" };
+  env.w.WFRest = Object.assign({}, env.w.WFRest, {
+    getBoardLabels: () => Promise.resolve([]),
+    createLabel: (t, b, name) => Promise.resolve({ id: "lbl1", name: name }),
+    addLabelToCard: () => Promise.resolve({}),
+    moveCard: () => Promise.resolve({}),
+    postComment: () => Promise.resolve({})
+  });
+
+  await QC.signOff(env.t, env.meta, {
+    phase: FINISH, stepId: "blast", items: [{ text: "Profile fully stripped", spec: "" }],
+    checked: { 0: true }, signature: "Kevin Moss", signedBy: peer, worker: env.worker
+  });
+
+  // A well-travelled job: enough history that the card scope is already over
+  // budget, so the trim loop has to run. Written after the sign-off because a
+  // full card refuses the qcRecord write too, which is a different test.
+  env.store["c1/phaseLog"] = Array.from({ length: 40 }, (_, i) => ({
+    listId: "L" + i, listName: "ReWork",
+    claimedBy: { id: "w", username: "mike", fullName: "Mike Ross" },
+    durationMinutes: 10 + i, completedAt: "2026-01-0" + ((i % 9) + 1) + "T00:00:00.000Z",
+    approvedBy: { id: "p", username: "kevinmoss", fullName: "Kevin Moss" },
+    approvedAt: "2026-01-0" + ((i % 9) + 1) + "T00:00:00.000Z"
+  }));
+
+  await QC.passSigned(env.t, env.meta,
+    { id: "c1", idList: env.meta.idList, qcRecord: env.store["c1/qcRecord"] },
+    { phase: FINISH, stepId: "blast" });
+
+  const log = env.store["c1/phaseLog"];
+  assert.ok(log.length < 41, "it really did have to trim to fit");
+  const last = log[log.length - 1];
+  assert.equal(last.step, "Sandblast", "and the entry it was called to write is still there");
+  assert.equal(last.listName, FINISH);
+  assert.equal(last.durationMinutes, 60);
+  assert.ok(last.trimmed > 0,
+    "carrying a count of what was dropped, so the archive can say the history " +
+    "is shorter than the truth rather than pretending it is complete");
+});
+
+test("a signature belongs to a bench, not to a list", async () => {
+  /* FIX 1. The blast booth's sign-off must not answer for the powder booth,
+   * which shares its Trello column and therefore its qcRecord key. */
+  const env = benchEnv({ stage: FINISH });
+  const QC = env.w.WFQC;
+  const peer = { id: "p", username: "kevinmoss", fullName: "Kevin Moss" };
+
+  await QC.signOff(env.t, env.meta, {
+    phase: FINISH, stepId: "blast", items: [{ text: "Profile fully stripped", spec: "" }],
+    checked: { 0: true }, signature: "Kevin Moss", signedBy: peer, worker: env.worker
+  });
+  const card = { id: "c1", idList: env.meta.idList, qcRecord: env.store["c1/qcRecord"] };
+
+  assert.equal(QC.floorSignOff(card, "powder"), null,
+    "the powder booth does not inherit the blast booth's signature");
+  assert.ok(QC.floorSignOff(card, "blast"), "and the blast booth still sees its own");
+  assert.equal(QC.floorSignOff(card, "blast").stepId, "blast");
+  assert.equal(card.qcRecord.rounds[0].stepId, "blast",
+    "stamped on the round too, so a record carrying both benches says which is which");
+
+  /* AND A CALLER THAT DOES NOT KNOW ABOUT BENCHES STILL SEES THE RECORD.
+   *
+   * lib/records.js, the archive and every undivided phase ask this question
+   * with no step. If a stamped record stopped answering it, finishing QC would
+   * vanish from the archive entirely -- the fix would have traded one silent
+   * data loss for another. */
+  assert.ok(QC.floorSignOff(card),
+    "asked with no step, a stamped record still answers");
+  assert.equal(QC.floorSignOff(card).stepId, "blast",
+    "and hands back the stamp, so a reader can still tell which bench");
+});
+
+test("an undivided phase signs off with no step on either side", async () => {
+  // Both absent is the normal case for every phase except finishing, and the
+  // stepId rules must be invisible to it.
+  const env = benchEnv();
+  const QC = env.w.WFQC;
+  const peer = { id: "p", username: "kevinmoss", fullName: "Kevin Moss" };
+  await QC.signOff(env.t, env.meta, {
+    phase: env.stage.name, items: [{ text: "Packet complete", spec: "" }],
+    checked: { 0: true }, signature: "Kevin Moss", signedBy: peer, worker: env.worker
+  });
+  const card = { id: "c1", idList: env.meta.idList, qcRecord: env.store["c1/qcRecord"] };
+  assert.equal(card.qcRecord.stepId, null);
+  assert.ok(QC.floorSignOff(card), "no step asked for, none recorded, matches");
+  assert.equal(QC.floorSignOff(card, "blast"), null,
+    "but a bench that asks by name is not answered by an unstamped record — " +
+    "fail closed, because the alternative is shipping powder nobody checked");
+});
+
+test("my jobs cannot walk a finishing job past the powder booth", async () => {
+  /* FIX 3. submitSelfCheck arrives with a phase name and nothing else: no
+   * station, so no way to tell blast from powder. Advancing regardless is the
+   * original bug on a second surface. */
+  const env = benchEnv({ stage: FINISH });
+  const QC = env.w.WFQC;
+  await assert.rejects(
+    () => QC.submitSelfCheck(env.t, env.meta, FINISH, env.worker,
+      [{ text: "Coverage even", spec: "", result: "pass", note: "" }]),
+    /more than one bench|Floor tab/,
+    "it refuses and says where to go, rather than guessing which booth you are at");
+  assert.equal(env.moved.length, 0, "and the card stays in finishing");
+
+  // An undivided phase is untouched by the rule.
+  const ok = benchEnv();
+  ok.w.WFRest = Object.assign({}, ok.w.WFRest, {
+    moveCard: (t, id, list) => { ok.moved.push(list); return Promise.resolve({}); },
+    postComment: () => Promise.resolve({})
+  });
+  const res = await ok.w.WFQC.submitSelfCheck(ok.t, ok.meta, ok.stage.name, ok.worker,
+    [{ text: "Packet complete", spec: "", result: "pass", note: "" }]);
+  assert.equal(res.passed, true);
+  assert.equal(ok.moved.length, 1, "a one-bench phase still self-checks and advances");
+});
+
+test("finishing powder does move the card, and takes the label off", async () => {
+  const env = benchEnv({ stage: FINISH });
+  const QC = env.w.WFQC;
+  const peer = { id: "p", username: "kevinmoss", fullName: "Kevin Moss" };
+  const dropped = [];
+  env.w.WFRest = Object.assign({}, env.w.WFRest, {
+    getBoardLabels: () => Promise.resolve([{ id: "lbl1", name: "Blasted" }]),
+    createLabel: () => Promise.resolve({ id: "lbl1", name: "Blasted" }),
+    addLabelToCard: () => Promise.resolve({}),
+    removeLabelFromCard: (t, cardId, id) => { dropped.push(id); return Promise.resolve({}); },
+    moveCard: (t, id, list) => { env.moved.push(list); return Promise.resolve({}); },
+    postComment: () => Promise.resolve({})
+  });
+
+  await QC.signOff(env.t, env.meta, {
+    phase: FINISH, items: [{ text: "Coverage even", spec: "" }],
+    checked: { 0: true }, signature: "Kevin Moss", signedBy: peer, worker: env.worker
+  });
+
+  const card = { id: "c1", idList: env.meta.idList, idLabels: ["lbl1"],
+                 qcRecord: env.store["c1/qcRecord"] };
+  await QC.passSigned(env.t, env.meta, card, {
+    phase: FINISH, stationType: "powder",
+    boardLabels: [{ id: "lbl1", name: "Blasted" }]
+  });
+
+  assert.equal(env.moved.length, 1, "the last step is a real hand-off");
+  assert.deepEqual(dropped, ["lbl1"],
+    "and the step label comes off, so a job coming back for rework does not " +
+    "land straight in the powder queue unblasted");
+});
+
+test("the phantom stations are gone and cannot walk back in", () => {
+  /* The cure oven and the wet paint bay were both invented in the defaults and
+   * neither exists in the shop. Deleting them from DEFAULTS is not enough:
+   * merge() reads any saved station it does not recognise as one the shop added
+   * itself, so a board that saved a config while they were shipping would get
+   * them back on every load, staffed by nobody, taking a column on the TV. */
+  const d = T.defaults().map(T.hydrate);
+  const finishing = d.filter((s) => s.area === "finishing");
+  assert.deepEqual(finishing.map((s) => s.table), ["Blast booth", "Powder booth"]);
+  assert.ok(!T.typeOf("cure"), "the cure type is gone");
+  assert.ok(!T.typeOf("wet"), "and so is wet paint");
+
+  const merged = T.merge({
+    stations: [{ id: "f3", table: "Cure oven", type: "cure" },
+               { id: "f4", table: "Wet paint", type: "wet" },
+               { id: "x1", area: "shop", table: "Fifth bench", type: "weld" }],
+    visible: ["f3", "f4", "x1"]
+  });
+  assert.ok(!merged.stations.some((s) => s.id === "f3"));
+  assert.ok(!merged.stations.some((s) => s.id === "f4"));
+  assert.ok(merged.stations.some((s) => s.id === "x1"),
+    "a station the shop really did add is still kept");
+});
+
+test("getBoardCardsFull hands back idLabels", () => {
+  /* Exactly the idBoard bug again: a field asked for and then dropped from the
+   * projection. Without it every card reads as unlabelled, so every job looks
+   * unblasted and the powder booth's queue is permanently empty. */
+  const source = code("lib/trello-rest.js");
+  const start = source.indexOf("getBoardCardsFull");
+  const body = source.slice(start, source.indexOf("\n  }\n", start));
+  assert.match(body, /fields:\s*"[^"]*\bidLabels\b/, "asked for");
+  assert.match(body, /\bidLabels:\s*c\.idLabels\b/, "and carried into the result");
+});
 
 /* ==================================================================== faults */
 
@@ -1325,3 +1769,221 @@ test("a peer-checked phase records who vouched, not just who ticked", async () =
   assert.equal(env.store["c1/phaseWork"], undefined,
     "the phase is closed, not left waiting");
 });
+
+/* ======================================================= handing a job over
+ *
+ * A welder who gets ahead pulling the next job off another bench is the shop
+ * organising itself, and it does not wait for a manager. What it must not be
+ * is quiet: without a record the numbers lie in both directions at once -- the
+ * person handing over looks slow for work they passed on, the person taking it
+ * looks fast for work they inherited.
+ */
+
+const TAKER = { id: "k", username: "kevinmoss", fullName: "Kevin Moss" };
+
+test("taking a job over moves the claim, stops the clock and says so on the card",
+  async () => {
+    const { w, t, store, meta, worker, comments } = benchEnv({ pct: 40 });
+
+    const work = await w.WFPhase.takeOver(t, meta, TAKER, { reason: "Mike is on the truck" });
+
+    assert.equal(work.claimedBy.username, "kevinmoss", "the job is Kevin's now");
+    assert.equal(store["c1/phaseWork"].claimedBy.username, "kevinmoss",
+      "and it is written, not merely returned");
+
+    // The live half: the station can say "taken from Mike at 40%" rather than
+    // leaving the next person wondering why the bar is not at zero.
+    assert.ok(work.takenFrom, "the handover is recorded on the work");
+    assert.equal(work.takenFrom.username, "mike");
+    assert.equal(work.takenFrom.fullName, "Mike Ross");
+    assert.equal(work.takenFrom.pct, 40);
+    assert.ok(work.takenFrom.at, "and when");
+
+    // The clock stops for the person handing over. Without this their timer
+    // keeps running against somebody else's hands on the job.
+    assert.ok(work.segments.every((s) => s.end),
+      "no segment is left open across the handover");
+
+    // The permanent half: native to the card, readable without the Power-Up.
+    const said = comments.join(" | ");
+    assert.match(said, /Kevin Moss took this over from Mike Ross at 40%/);
+    assert.match(said, /Mike is on the truck/, "the reason is kept when one is given");
+    assert.equal(worker.username, "mike", "(fixture sanity: Mike had it)");
+  });
+
+test("taking over a job you already have changes nothing and says nothing",
+  async () => {
+    const { w, t, store, meta, worker, comments } = benchEnv();
+    const same = { id: "w", username: worker.username, fullName: worker.fullName };
+    const before = JSON.stringify(store["c1/phaseWork"]);
+
+    const work = await w.WFPhase.takeOver(t, meta, same);
+
+    assert.ok(!work.takenFrom, "you cannot take a job from yourself");
+    assert.equal(JSON.stringify(store["c1/phaseWork"]), before, "nothing was written");
+    assert.deepEqual(comments, [], "and nobody was told about a non-event");
+  });
+
+test("there is nothing to take on a job with no open work", async () => {
+  const { w, t, meta } = benchEnv();
+  // A different card, so the store has no phaseWork for it at all.
+  const bare = Object.assign({}, meta, { id: "nope" });
+  await assert.rejects(() => w.WFPhase.takeOver(t, bare, TAKER),
+    /no open work/i, "taking un-started work would invent a phase nobody opened");
+});
+
+/* THE ACCOUNTING QUESTION, NOW DECIDED.
+ *
+ * takeOver closes the running segment and the Floor then calls resume(), which
+ * pushes a new one onto the SAME segment list. totalMinutes sums the lot, which
+ * is the right answer to "how long did this phase take" -- it is what costing
+ * and the hours-per-$1,000 figure want, and it does NOT change here.
+ *
+ * What was missing was the other question, "how long did each person spend",
+ * and the old behaviour answered it with the first question's number attached
+ * to whoever happened to finish. The decision taken was option (b): keep one
+ * segment list and one total, and stamp the outgoing worker onto their own
+ * segments as the claim moves, so minutesByPerson can split it afterwards.
+ *
+ * These are the tests that decision has to keep passing.
+ */
+test("after a handover the phase total is still both people's minutes",
+  async () => {
+    const { w, t, meta } = benchEnv();
+    const first = w.WFPhase.totalMinutes(await w.WFPhase.getActivePhaseWork(t, meta));
+    assert.ok(first >= 59, "the fixture has about an hour on it already");
+
+    await w.WFPhase.takeOver(t, meta, TAKER);
+    await w.WFPhase.resume(t, meta);
+    const after = w.WFPhase.totalMinutes(await w.WFPhase.getActivePhaseWork(t, meta));
+
+    assert.ok(after >= first,
+      "how long the PHASE took is unchanged -- costing still reads one figure");
+  });
+
+test("but the minutes now split by person, and the parts sum to the total",
+  async () => {
+    const { w, t, meta, worker } = benchEnv();
+    await w.WFPhase.takeOver(t, meta, TAKER);
+    await w.WFPhase.resume(t, meta);
+
+    const work = await w.WFPhase.getActivePhaseWork(t, meta);
+    const split = w.WFPhase.minutesByPerson(work);
+
+    assert.deepEqual(Object.keys(split).sort(), ["kevinmoss", "mike"],
+      "both pairs of hands are named, not just the one holding it now");
+    assert.ok(split[worker.username] >= 59,
+      "the hour Mike put in stays Mike's (" + split[worker.username] + " min)");
+    assert.ok(split[TAKER.username] < 5,
+      "and Kevin has only just picked it up");
+
+    const sum = Object.keys(split).reduce((n, k) => n + split[k], 0);
+    assert.equal(sum, w.WFPhase.totalMinutes(work),
+      "the parts sum to the phase total -- no hours invented, none lost");
+    assert.equal(w.WFPhase.changedHands(work), true);
+  });
+
+test("a job that never changes hands reads correctly with no `by` stored at all",
+  async () => {
+    const { w, t, meta, store, worker } = benchEnv();
+    const work = await w.WFPhase.getActivePhaseWork(t, meta);
+
+    assert.ok(work.segments.every((s) => s.by === undefined),
+      "an ordinary job pays nothing for a question it does not raise");
+    assert.deepEqual(w.WFPhase.minutesByPerson(work),
+      { [worker.username]: w.WFPhase.totalMinutes(work) },
+      "unstamped means `whoever holds the claim`, which is the whole trick");
+    assert.equal(w.WFPhase.changedHands(work), false,
+      "and no byPerson map is worth writing for one name");
+
+    assert.ok(!/"by"/.test(JSON.stringify(store["c1/phaseWork"])),
+      "nothing extra reached the card");
+  });
+
+test("minutesByPerson counts a RUNNING segment up to now, exactly as totalMinutes does",
+  async () => {
+    const { w, t, meta, worker } = benchEnv();
+    const work = await w.WFPhase.getActivePhaseWork(t, meta);
+    assert.equal(w.WFPhase.isRunning(work), true, "the fixture's clock is live");
+
+    const split = w.WFPhase.minutesByPerson(work);
+    assert.ok(isFinite(split[worker.username]),
+      "an open segment has no `end`; new Date(undefined) would make this NaN");
+    assert.equal(split[worker.username], w.WFPhase.totalMinutes(work),
+      "a live clock reads the same either way");
+  });
+
+/* TWO HANDOVERS, WHICH IS WHERE A STAMP-AS-YOU-GO SCHEME USUALLY LOSES SOMEBODY.
+ *
+ * takeOver stamps only the segments that have no `by` yet. If it stamped them
+ * all, the second handover would relabel Mike's hour with Kevin's name and the
+ * first worker would vanish from a job he started -- the original bug, just one
+ * handover later and much harder to notice. This is the test that says it does
+ * not. */
+test("after TWO handovers the first worker's hour is still the first worker's",
+  async () => {
+    const SECOND = { id: "k", username: "kevinmoss", fullName: "Kevin Moss" };
+    const THIRD = { id: "s", username: "scottv", fullName: "Scott VanWorkom" };
+    const { w, t, meta, worker } = benchEnv();
+
+    await w.WFPhase.takeOver(t, meta, SECOND);
+    await w.WFPhase.resume(t, meta);
+    // Kevin works for a measurable while before handing on again.
+    let work = await w.WFPhase.getActivePhaseWork(t, meta);
+    const live = work.segments[work.segments.length - 1];
+    live.start = new Date(Date.now() - 1800000).toISOString();   // 30 min
+    await t.set(meta.id, "shared", "phaseWork", work);
+
+    await w.WFPhase.takeOver(t, meta, THIRD);
+    await w.WFPhase.resume(t, meta);
+
+    work = await w.WFPhase.getActivePhaseWork(t, meta);
+    const split = w.WFPhase.minutesByPerson(work);
+
+    assert.deepEqual(Object.keys(split).sort(), ["kevinmoss", "mike", "scottv"],
+      "three people worked it and three people are named");
+    assert.ok(split.mike >= 59,
+      "Mike's hour did not get re-stamped with Kevin's name (" + split.mike + ")");
+    assert.ok(split.kevinmoss >= 29 && split.kevinmoss <= 31,
+      "Kevin is credited with his half hour and no more (" + split.kevinmoss + ")");
+    assert.ok(split.scottv < 5, "Scott has barely started");
+    assert.equal(
+      Object.keys(split).reduce((n, k) => n + split[k], 0),
+      w.WFPhase.totalMinutes(work), "and the three parts still sum to the total");
+  });
+
+/* WHAT THE SPLIT COSTS THE CARD.
+ *
+ * phaseWork, phaseLog and qcRecord share one 4,096-character budget, and
+ * appendLog already trims the log to fit -- so anything added here is paid for
+ * in dropped history. `by` is a username on each segment, which is why the
+ * stamp happens at the handover and not on every push. */
+test("the handover stamp costs a username per segment, and nothing when it never happens",
+  async () => {
+    const { w, t, meta, store } = benchEnv();
+    const before = JSON.stringify(store["c1/phaseWork"]).length;
+
+    await w.WFPhase.takeOver(t, meta, TAKER);
+    await w.WFPhase.resume(t, meta);
+    const after = JSON.stringify(store["c1/phaseWork"]).length;
+
+    const work = await w.WFPhase.getActivePhaseWork(t, meta);
+    const stamped = work.segments.filter((s) => s.by).length;
+    const perSegment = ('"by":"' + TAKER.username + '",').length;   // ~17
+
+    assert.equal(stamped, 1, "only the outgoing worker's segments carry a name");
+    assert.ok(after - before < 200,
+      "a handover costs tens of characters, not hundreds (" + (after - before) + ")");
+    assert.ok(stamped * perSegment < w.WFStore.LIMIT / 10,
+      "even a job paused ten times and handed on stays far inside the budget");
+
+    /* And the figure that actually lands on the card for good: the log entry,
+     * which carries the byPerson map the archive reads. */
+    await w.WFPhase.complete(t, meta, { silent: true });
+    const entry = await w.WFPhase.logPhase(t, meta, { by: TAKER });
+    assert.ok(entry.byPerson, "a phase that changed hands records the split");
+    assert.ok(JSON.stringify(entry.byPerson).length < 120,
+      "two names and two numbers (" + JSON.stringify(entry.byPerson) + ")");
+    assert.ok(JSON.stringify(store["c1/phaseLog"]).length < w.WFStore.MARGIN,
+      "and the log still fits what the card can hold");
+  });

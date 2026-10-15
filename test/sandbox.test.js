@@ -130,6 +130,41 @@ test("on, REST writes are recorded instead of sent", async () => {
   assert.match(words, /Would post a comment/);
 });
 
+test("a label hand-off in test mode touches nothing on the real board", async () => {
+  /* THE GAP THIS CLOSES. The blast/powder split writes through three REST calls
+   * nothing else in the repo used -- addLabelToCard, removeLabelFromCard and
+   * createLabel -- and they were not on REST_WRITES. So a manager rehearsing a
+   * blast hand-off in test mode put a real "Blasted" label on a real card, and
+   * on a board that had never run one, created the label as well, while the
+   * change log said nothing had been written. A sandbox that writes is worse
+   * than no sandbox, because people trust it.
+   *
+   * `write` being on the list does not save this: every one of these closes
+   * over trello-rest.js's own module-local write helper, so swapping the
+   * exported one changes nothing about what they do. */
+  const calls = [];
+  win.WFRest.addLabelToCard = (t, id, lbl) => { calls.push(["add", id, lbl]); return Promise.resolve({}); };
+  win.WFRest.removeLabelFromCard = (t, id, lbl) => { calls.push(["remove", id, lbl]); return Promise.resolve({}); };
+  win.WFRest.createLabel = (t, b, n, c) => { calls.push(["create", b, n]); return Promise.resolve({}); };
+
+  S.enable();
+  await win.WFRest.addLabelToCard({}, "card1", "lbl1");
+  await win.WFRest.removeLabelFromCard({}, "card1", "lbl1");
+  const made = await win.WFRest.createLabel({}, "board1", "Blasted", "sky");
+  assert.equal(calls.length, 0, "not one of them reached Trello");
+
+  // And the rehearsal can still run to the end: WFSteps.ensureLabel reads `id`
+  // off this and refuses the hand-off without one, so a bare {ok:true} would
+  // make the first-ever blast hand-off look like it had failed.
+  assert.ok(made && made.id, "a sandboxed createLabel still answers with an id");
+  assert.equal(made.name, "Blasted");
+
+  const words = S.entries().map((e) => e.summary).join(" | ");
+  assert.match(words, /Would put a label on card/);
+  assert.match(words, /Would take a label off card/);
+  assert.match(words, /Would create the .*Blasted.* label/);
+});
+
 test("a sandboxed move still answers with the new list", async () => {
   // The caller often reads idList off the result; returning nothing would make
   // a success that went nowhere look like a failure.

@@ -244,6 +244,121 @@ test("totals group by person and by phase", () => {
     ["Assemble CNC", "CAD"], "biggest first");
 });
 
+/* ========================================= a phase two people worked on
+ *
+ * phase.js stamps the outgoing worker onto their own segments at a handover and
+ * writes minutesByPerson onto the log entry as `byPerson`. Everything below is
+ * what the archive has to do with that, and the cases it must not break. */
+
+/** A finished phase that changed hands, as phase.js writes it. */
+const sharedEntry = (phase, finisher, split, daysAgo) => ({
+  listId: "L", listName: phase, claimedBy: finisher,
+  durationMinutes: Object.keys(split).reduce((n, k) => n + split[k], 0),
+  byPerson: split, completedAt: iso(-daysAgo), approvedBy: BOSS
+});
+
+test("a phase two people worked gives a row each, with the right minutes", () => {
+  const { R } = boot();
+  /* The second card is not decoration: a split is keyed by USERNAME, and the
+   * only place a username can be turned back into a name is the claimedBy and
+   * approvedBy objects on the cards in hand. Kevin claiming something else in
+   * the same set is what lets the archive print "Kevin Moss" -- see the
+   * username/display-name test below for what rides on that. */
+  const entries = R.timeEntries([
+    card("A", { log: [sharedEntry("CAD", SCOTT, { kevinmoss: 90, scottv: 30 }, 1)] }),
+    card("B", { log: [logEntry("Assemble CNC", KEV, 15, 1)] })
+  ]).filter((e) => e.cardId === "A");
+
+  assert.equal(entries.length, 2, "one row per pair of hands");
+  const by = {};
+  entries.forEach((e) => { by[e.who] = e; });
+  assert.deepEqual(Object.keys(by).sort(), ["Kevin Moss", "Scott VanWorkom"]);
+  assert.equal(by["Kevin Moss"].minutes, 90,
+    "the hour and a half Kevin put in is Kevin's, not the finisher's");
+  assert.equal(by["Scott VanWorkom"].minutes, 30);
+  assert.ok(entries.every((e) => e.shared === true), "and both say so");
+  assert.equal(entries[0].phase, "CAD");
+});
+
+test("the parts of a split sum to the phase's durationMinutes", () => {
+  const { R } = boot();
+  const log = [sharedEntry("CAD", SCOTT, { kevinmoss: 90, scottv: 30 }, 1)];
+  const entries = R.timeEntries([card("A", { log })]);
+  assert.equal(entries.length, 2, "there are parts to sum in the first place");
+  assert.equal(entries.reduce((n, e) => n + e.minutes, 0), log[0].durationMinutes,
+    "no hours invented, none lost -- the phase total is still the phase total");
+});
+
+test("a solo phase stays one row and names the one person", () => {
+  const { R } = boot();
+  const entries = R.timeEntries([card("A", { log: [logEntry("CAD", KEV, 120, 1)] })]);
+  assert.equal(entries.length, 1, "nothing to split");
+  assert.equal(entries[0].who, "Kevin Moss");
+  assert.equal(entries[0].minutes, 120);
+  assert.equal(entries[0].shared, undefined,
+    "and no flag, because there is nothing shared about it");
+});
+
+/* THE BUG THAT WOULD HAVE EATEN THE FIX.
+ *
+ * byPerson is keyed by USERNAME -- all takeOver can afford to store. Every
+ * other row sets `who` from nameOf(claimedBy), a DISPLAY NAME. timeSummary
+ * groups on `who`. So a raw username in the split branch put the same welder in
+ * the report twice, as "kevinmoss" and as "Kevin Moss", with his hours divided
+ * between them: the split would have hidden a person's real total while
+ * appearing to fix the attribution. */
+test("a username from a split and a display name from a solo phase are ONE person",
+  () => {
+    const { R } = boot();
+    const s = R.timeSummary(R.timeEntries([
+      card("A", { log: [sharedEntry("CAD", SCOTT, { kevinmoss: 90, scottv: 30 }, 1)] }),
+      card("B", { log: [logEntry("Assemble CNC", KEV, 60, 1)] })
+    ]));
+
+    assert.equal(s.byPerson.kevinmoss, undefined,
+      "nobody appears in a report under their login");
+    assert.equal(s.byPerson["Kevin Moss"].minutes, 150,
+      "90 shared plus 60 solo, on one line, under one name");
+    assert.equal(s.byPerson["Scott VanWorkom"].minutes, 30);
+    assert.equal(Object.keys(s.byPerson).length, 2, "two people worked, two rows");
+  });
+
+test("a username nobody is named against anywhere still groups, as itself", () => {
+  const { R } = boot();
+  const s = R.timeSummary(R.timeEntries([
+    card("A", { log: [sharedEntry("CAD", SCOTT, { ghost: 60, scottv: 30 }, 1)] }),
+    card("B", { log: [sharedEntry("CAD", SCOTT, { ghost: 20, scottv: 10 }, 1)] })
+  ]));
+  assert.equal(s.byPerson.ghost.minutes, 80,
+    "a readable last resort beats dropping the hours or inventing a name");
+});
+
+test("the job's value is not multiplied by the number of people on a phase", () => {
+  const { R } = boot();
+  /* bump() ASSIGNS value per job rather than summing it, so repeating the
+   * value on every split row is already harmless -- but hoursPerThousand and
+   * revenuePerHour both divide by it, so this is pinned rather than assumed. */
+  const ids = ["A", "B", "C", "D", "E"];
+  const solo = R.timeSummary(R.timeEntries(ids.map((id) =>
+    card(id, { log: [logEntry("CAD", KEV, 600, 2)], value: 10000 }))));
+  const split = R.timeSummary(R.timeEntries(ids.map((id) =>
+    card(id, {
+      log: [sharedEntry("CAD", SCOTT, { kevinmoss: 300, scottv: 300 }, 2)],
+      value: 10000
+    }))));
+
+  assert.equal(solo.hoursPerThousand, 1);
+  assert.equal(solo.revenuePerHour, 1000);
+  assert.equal(Math.round(split.hours), Math.round(solo.hours),
+    "the same 50 hours, however many people put them in");
+  assert.equal(split.jobsPriced, 5, "five jobs, not ten");
+  assert.equal(split.byJob["#A — job A"].value, 10000,
+    "the job is worth what it is worth, once");
+  assert.equal(split.hoursPerThousand, solo.hoursPerThousand,
+    "so the estimating number does not halve when two people share a bench");
+  assert.equal(split.revenuePerHour, solo.revenuePerHour);
+});
+
 test("the period filter uses the completion date and drops ongoing work", () => {
   const { R } = boot();
   const entries = R.timeEntries([
@@ -261,11 +376,121 @@ test("the CSV carries the value alongside the hours, and quotes what it must", (
     card("A", { name: 'Job "A", with a comma', log: [logEntry("CAD", KEV, 600, 2)], value: 10000 })
   ]).concat([{ ongoing: true, job: "nope", minutes: 5, hours: 0.1 }]));
   const lines = csv.split("\n");
-  assert.match(lines[0], /^Job,Job number,Phase,Who,Approved by,Minutes,Hours,Completed,Job value,Hours per \$1,000$/
-    .source.replace(/\\/g, "") ? /Job,Job number,Phase/ : /Job/);
+  /* The header, spelled out. What stood here was a ternary on a non-empty
+   * string -- always truthy, so it only ever asserted /Job,Job number,Phase/
+   * and a column could have been added, renamed or dropped without a word.
+   * "Hours per $1,000" holds a comma, so the writer must quote it. */
+  assert.equal(lines[0],
+    'Job,Job number,Phase,Who,Approved by,Minutes,Hours,Completed,Job value,' +
+    '"Hours per $1,000",Shared phase');
   assert.equal(lines.length, 2, "the ongoing entry is left out");
   assert.match(lines[1], /"Job ""A"", with a comma"/, "quotes and commas escaped");
-  assert.match(lines[1], /,10000,1$/, "value then hours per $1,000");
+  assert.match(lines[1], /,10000,1,$/,
+    "value, then hours per $1,000, then an empty Shared phase -- it was solo");
+});
+
+/* ==================================== the export of a phase two people worked
+ *
+ * This file is the raw material for the shop's standard build time, and nobody
+ * re-derives a figure out of a spreadsheet -- they SUM the column and believe
+ * it. Everything below pins a number somebody would otherwise believe wrongly. */
+
+/** The rows of one shared phase, in the order toCSV sees them. */
+const csvRows = (csv) => csv.split("\n").slice(1).map((l) => l.split(","));
+
+test("the job value is written once per shared phase, so the column sums true", () => {
+  const { R } = boot();
+  const csv = R.toCSV(R.timeEntries([
+    card("A", { log: [sharedEntry("CAD", SCOTT, { kevinmoss: 90, scottv: 30 }, 1)],
+                value: 9361 })
+  ]));
+  const rows = csvRows(csv);
+  assert.equal(rows.length, 2, "two people, two rows -- the hours are theirs");
+  const values = rows.map((r) => r[8]);
+  assert.deepEqual(values.filter((v) => v !== ""), ["9361"],
+    "the job is worth what it is worth, once");
+  assert.equal(values.reduce((n, v) => n + (Number(v) || 0), 0), 9361,
+    "SUM(Job value) is the job's value, not twice it");
+});
+
+test("the ratio on a shared phase's first row is the phase's, not one share", () => {
+  const { R } = boot();
+  /* Ten hours on a $10,000 job is 1.0 hours per $1,000 however the ten hours
+   * were divided. Computed from the person's share it would read 0.75 -- a
+   * quarter under, silently, on the one number this export exists to make. */
+  const shared = csvRows(R.toCSV(R.timeEntries([
+    card("A", { log: [sharedEntry("CAD", SCOTT, { kevinmoss: 450, scottv: 150 }, 1)],
+                value: 10000 })
+  ])));
+  const solo = csvRows(R.toCSV(R.timeEntries([
+    card("A", { log: [logEntry("CAD", KEV, 600, 1)], value: 10000 })
+  ])));
+
+  assert.equal(solo[0][9], "1", "the solo-equivalent figure");
+  assert.equal(shared[0][9], solo[0][9],
+    "a bench shared does not make the job take a quarter less per $1,000");
+  assert.equal(shared[1][9], "", "and it is not printed twice either");
+});
+
+test('"Shared phase" says yes on a split row and nothing on a solo one', () => {
+  const { R } = boot();
+  const rows = csvRows(R.toCSV(R.timeEntries([
+    card("A", { log: [sharedEntry("CAD", SCOTT, { kevinmoss: 90, scottv: 30 }, 1)] }),
+    card("B", { log: [logEntry("Assemble CNC", KEV, 60, 2)] })
+  ])));
+  const flagByJob = {};
+  rows.forEach((r) => { (flagByJob[r[0]] = flagByJob[r[0]] || []).push(r[10]); });
+  assert.deepEqual(flagByJob["#A — job A"], ["yes", "yes"],
+    "both halves are parts rather than wholes, and both say so");
+  assert.deepEqual(flagByJob["#B — job B"], [""],
+    "nothing shared about a phase one person did");
+});
+
+test("a shared phase is ONE finished phase in the per-phase table", () => {
+  const { R } = boot();
+  const s = R.timeSummary(R.timeEntries([
+    card("A", { log: [sharedEntry("CAD", SCOTT, { kevinmoss: 90, scottv: 30 }, 1)] }),
+    card("B", { log: [logEntry("CAD", KEV, 60, 2)] })
+  ]));
+  assert.equal(s.byPhase["CAD"].count, 2, "two CAD phases, not three rows");
+  assert.equal(s.byPhase["CAD"].minutes, 180, "and every minute still counted");
+  assert.equal(s.byJob["#A — job A"].count, 1, "one phase of job A was finished");
+  assert.equal(s.byPerson["Kevin Moss"].count, 2,
+    "byPerson still counts rows -- two people genuinely are two people's work");
+});
+
+test("s.phases is the distinct phase count, and s.entries stays the row count", () => {
+  const { R } = boot();
+  const s = R.timeSummary(R.timeEntries([
+    card("A", { log: [sharedEntry("CAD", SCOTT, { kevinmoss: 90, scottv: 30 }, 1),
+                      logEntry("Assemble CNC", KEV, 60, 2)] }),
+    card("B", { log: [logEntry("CAD", KEV, 30, 3)] })
+  ]));
+  assert.equal(s.phases, 3, "three phases were finished");
+  assert.equal(s.entries, 4, "across four rows -- the headline must not use this");
+});
+
+/* THE TWO BENCHES BEHIND ONE COLUMN.
+ *
+ * Blast and powder share the Trello list and both log under the PHASE name, so
+ * cardId|phase is one string for two separate pieces of work -- see
+ * lib/steps.js. The timestamp is a tie-breaker, not an identity. */
+test("blast and powder are two phases even when nothing but the step differs", () => {
+  const { R } = boot();
+  const at = iso(-1);
+  const stepped = (step) => ({
+    listId: "L", listName: "Sandblast / Powder Coat", step: step,
+    claimedBy: KEV, durationMinutes: 60, completedAt: at, approvedBy: BOSS
+  });
+  const cards = [card("A", { log: [stepped("blast"), stepped("powder")], value: 10000 })];
+
+  const s = R.timeSummary(R.timeEntries(cards));
+  assert.equal(s.phases, 2, "two benches finished two pieces of work");
+  assert.equal(s.byPhase["Sandblast / Powder Coat"].count, 2);
+
+  const rows = csvRows(R.toCSV(R.timeEntries(cards)));
+  assert.deepEqual(rows.map((r) => r[8]).filter((v) => v !== ""), ["10000", "10000"],
+    "each is its own phase, so each carries the value -- see phaseKey");
 });
 
 /* =============================================================== quality */
@@ -509,6 +734,31 @@ test("with enough data the ratios appear and the export is offered", async () =>
   const box = env.win.document.querySelector(".wf-rec-csv");
   assert.ok(box, "the CSV is shown, not just downloaded");
   assert.match(box.value, /Job,Job number,Phase/);
+});
+
+/* THE HEADLINE AND THE HOURS UNDER IT HAVE TO BE ABOUT THE SAME THING.
+ *
+ * "N finished phases" sat under a correct hours figure and read `s.entries` --
+ * a ROW count, one per pair of hands. A two-person CAD job reported as two
+ * phases, next to the right number of hours, is the shape of wrongness nobody
+ * checks. Both the stat and the export dialog are pinned here. */
+test('"finished phases" counts phases, in the headline and in the export', async () => {
+  const env = boot({
+    cards: [
+      card("A", { log: [sharedEntry("CAD", SCOTT, { kevinmoss: 90, scottv: 30 }, 1)] }),
+      card("B", { log: [logEntry("CAD", KEV, 60, 2)] }),
+      card("C", { log: [logEntry("Assemble CNC", KEV, 60, 2)] })
+    ]
+  });
+  const node = await render(env);
+  assert.match(textOf(node), /3 finished phases/,
+    "three phases across four rows -- the row count would say 4");
+  assert.doesNotMatch(textOf(node), /4 finished phases/);
+
+  $(node, "button").find((b) => textOf(b) === "Export")
+    .dispatchEvent(new env.win.Event("click"));
+  assert.match(textOf(env.win.document.body), /3 finished phases/,
+    "the dialog counts what the export is about, not its lines");
 });
 
 test("running work is shown but kept out of the totals", async () => {

@@ -67,13 +67,19 @@ function job(id, list, opts = {}) {
   };
 }
 
-function boot({ role = "worker", cards = [], saved = null } = {}) {
+function boot({ role = "worker", cards = [], saved = null, url = null,
+                me = KEV, members = [KEV, SCOTT], can = null } = {}) {
   const dom = new JSDOM(
     `<!doctype html><html><head></head><body>
        <div id="boardName"></div><div id="meName"></div><div id="meInitials"></div>
        <nav id="tabbar"></nav><main id="view"></main>
      </body></html>`,
-    { runScripts: "outside-only", pretendToBeVisual: true }
+    /* A url, when a test needs one. jsdom defaults to about:blank, which is an
+       opaque origin -- location.search is "" and localStorage THROWS rather
+       than returning null. Both are exactly the conditions readPin() has to
+       survive, so the default is left alone and only the pin tests opt in. */
+    Object.assign({ runScripts: "outside-only", pretendToBeVisual: true },
+      url ? { url } : {})
   );
   const win = dom.window;
   const store = saved ? { wfStations: saved } : {};
@@ -95,7 +101,16 @@ function boot({ role = "worker", cards = [], saved = null } = {}) {
     getCardDetail: (t, id) => Promise.resolve({
       id, name: "job " + id,
       attachments: [{ url: "https://x/drawing.png", mimeType: "image/png" }]
-    })
+    }),
+    /* The panel's body asks for custom fields the moment it draws. Without
+       this the call threw, the whole panel fell into its "couldn't open this
+       card" branch, and every panel assertion in this file was being made
+       against the error state rather than against the card. */
+    getCardFieldsDisplay: () => Promise.resolve([]),
+    updateCard: () => Promise.resolve({}),
+    postComment: () => Promise.resolve({}),
+    addMemberToCard: () => Promise.resolve({}),
+    invalidateCard: () => {}
   };
   win.WFRoster = { getRoster: () => Promise.resolve({ managers: [], phaseSpecialists: {} }) };
   win.WFPricing = { getBoardAudit: () => Promise.resolve([]) };
@@ -104,6 +119,16 @@ function boot({ role = "worker", cards = [], saved = null } = {}) {
   // The Floor writes now, so it needs the state machine and the checklists.
   win.eval(read("lib/phase.js"));
   win.eval(read("lib/qc.js"));
+  /* BEFORE tables.js, exactly as popups/ops.html loads it.
+   *
+   * This fixture was missing it, and the omission was invisible until the
+   * blast/powder split landed: lib/tables.js asks for it through `global.` and
+   * fails open, so the station queues looked right, while popups/tabs/floor.js
+   * names it BARE -- so confirmComplete threw a ReferenceError the moment a
+   * signed job's Complete was pressed, and the dialog simply never appeared.
+   * A tab file loaded here without every script ops.html gives it is a suite
+   * testing a configuration nobody runs. */
+  win.eval(read("lib/steps.js"));
   win.eval(read("lib/tables.js"));
   win.eval(read("lib/cardview.js"));
   // ops.js reads permissions at startup and on reload, so the module has to be
@@ -148,13 +173,16 @@ function boot({ role = "worker", cards = [], saved = null } = {}) {
 
   const ctx = {
     t,
-    board: { id: "OPS", name: "Office Operations", members: [KEV, SCOTT] },
-    member: KEV,
+    board: { id: "OPS", name: "Office Operations", members: members },
+    member: me,
     boardCfg: BOARD,
     roster: { managers: [], phaseSpecialists: {} },
     role,
     isManager: role === "manager",
     cards: () => Promise.resolve(cards),
+    // Absent unless a test asks for it, because the real shell only supplies
+    // it once permissions have loaded and the Floor has to survive both.
+    ...(can ? { can } : {}),
     reload: () => Promise.resolve(),
     syncCard: () => Promise.resolve(),
     goTo: () => {}
@@ -169,6 +197,28 @@ function boot({ role = "worker", cards = [], saved = null } = {}) {
 
 const textOf = (n) => (n.textContent || "").replace(/\s+/g, " ").trim();
 const $ = (n, sel) => Array.from(n.querySelectorAll(sel));
+
+/**
+ * Let the promise chains behind a click finish.
+ *
+ * The card panel paints its body and its footer only once getCardDetail
+ * resolves, and a write runs fn -> reload -> refreshData -> paint. One tick is
+ * not enough for either, and a test that asserts too early reads as a missing
+ * button rather than as a missing await.
+ */
+async function settle(env, n = 6) {
+  for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
+}
+
+/** The button the card panel's footer carries -- the only thing that starts a clock. */
+const footBtn = (col) => $(col, ".wf-cp-foot .wf-btn")[0];
+
+/** A round navy button in the top bar, by what it says it does. */
+function gear(node, title) {
+  const g = $(node, ".wf-fl-gear").find((b) => b.getAttribute("title") === title);
+  assert.ok(g, "no gear titled " + JSON.stringify(title));
+  return g;
+}
 
 function render(env, width) {
   if (width) Object.defineProperty(env.win, "innerWidth", { value: width, configurable: true });
@@ -190,9 +240,16 @@ const ONE_STATION = {
 test("the defaults describe the shop, not the board", () => {
   const { T } = boot();
   const d = T.defaults().map(T.hydrate);
+  /* Seven, not nine. The cure oven and the wet paint bay were invented in the
+   * defaults and neither exists in the shop -- the oven is time the powder
+   * operator owns rather than a bench anybody stands at, and there is no wet
+   * paint bay at all. A station nobody works at still takes a column on the
+   * shop TV and still asks to be staffed, so they are gone rather than hidden.
+   * test/regressions.test.js holds the other half: that a saved config naming
+   * them cannot put them back. */
   assert.deepEqual(d.map((s) => s.table), [
     "Station #1", "Station #2", "Station #3", "Station #4", "CAP rail bench",
-    "Blast booth", "Powder booth", "Cure oven", "Wet paint"
+    "Blast booth", "Powder booth"
   ]);
 
   // THE BUG THIS TEST EXISTS FOR. The first cut gave each welding bench a
@@ -204,10 +261,14 @@ test("the defaults describe the shop, not the board", () => {
     "every welding bench pulls the same list");
 
   assert.equal(d.find((s) => s.table === "CAP rail bench").phase, "Assemble CAP");
+  /* BOTH finishing benches pull the SAME list, because there is only one
+   * column. Which of the two owns a given job is decided by a Trello label --
+   * see lib/steps.js -- not by the card being in a different place. */
   assert.equal(d.find((s) => s.table === "Blast booth").phase, "Sandblast / Powder Coat");
-  // Wet paint has no matching list, so it is left unset rather than pointed
-  // somewhere plausible -- a guess dressed as a fact.
-  assert.equal(d.find((s) => s.table === "Wet paint").phase, "");
+  assert.equal(d.find((s) => s.table === "Powder booth").phase, "Sandblast / Powder Coat");
+  // The laser bay still has no matching list, so its type is left unset rather
+  // than pointed somewhere plausible -- a guess dressed as a fact.
+  assert.equal(T.phaseForType("laser"), "");
   // Nobody is rostered by default.
   assert.ok(d.every((s) => s.welder === ""));
 });
@@ -240,10 +301,10 @@ test("a new shipped station appears, and a deleted one stays deleted", () => {
   const { T } = boot();
   // These two rules pull in opposite directions and both matter.
   const grown = T.merge({ stations: [{ id: "s1", table: "Big table" }], visible: ["s1"] });
-  assert.equal(grown.stations.length, 9, "the others survive");
+  assert.equal(grown.stations.length, 7, "the others survive");
 
   const pruned = T.merge({ stations: [], visible: [], removed: ["s4"] });
-  assert.equal(pruned.stations.length, 8);
+  assert.equal(pruned.stations.length, 6);
   assert.ok(!pruned.stations.some((s) => s.id === "s4"),
     "a station somebody deleted does not walk back in on the next load");
   assert.deepEqual(pruned.removed, ["s4"]);
@@ -508,7 +569,15 @@ test("a manager gets the clock, the summary strip and station setup", async () =
   assert.equal($(node, ".wf-fl-sum").length, 1, "summary strip");
   // Station setup is a gear now, not a text button wedged beside Refresh --
   // it was the first thing a manager needs and it looked like a filter.
-  assert.equal($(node, ".wf-fl-gear").length, 1, "station setup gear");
+  //
+  // TWO of them since the bench pin landed, and they are told apart by title
+  // rather than by position: this used to assert a count of one and index [0],
+  // so adding the pin button beside it both failed here and silently re-aimed
+  // the station-setup test at the wrong dialog.
+  const gears = $(node, ".wf-fl-gear");
+  assert.equal(gears.length, 2, "pin and station setup");
+  assert.deepEqual(gears.map((g) => g.getAttribute("title")),
+    ["Pin this tablet to one station", "Station setup"]);
 });
 
 test("a worker gets no summary strip and no station setup", async () => {
@@ -636,14 +705,15 @@ test("switching areas keeps you there, and the finishing bay reads its own stati
   const view = env.win.document.getElementById("view");
   assert.match(textOf(view.querySelector(".wf-fl-area")), /Finishing bay/);
   const names = $(view, ".wf-fl-name").map(textOf);
-  assert.deepEqual(names, ["Blast booth", "Powder booth", "Cure oven", "Wet paint"]);
+  // Two benches, not four: the finishing bay is blast then powder, and both of
+  // them pull the one "Sandblast / Powder Coat" column.
+  assert.deepEqual(names, ["Blast booth", "Powder booth"]);
 });
 
 test("saving stations writes config and nothing else", async () => {
   const env = boot({ role: "manager", saved: ONE_STATION, cards: [] });
   const node = await render(env, 1280);
-  $(node, ".wf-fl-gear")[0]
-    .dispatchEvent(new env.win.Event("click"));
+  gear(node, "Station setup").dispatchEvent(new env.win.Event("click"));
   // The dialog waits for the checklist library before it paints, so that a
   // dropdown doesn't fill in after somebody has already looked at it.
   await new Promise((r) => setTimeout(r, 0));
@@ -790,10 +860,14 @@ test("a queued job opens its own card in the same column", async () => {
 
   tiles[0].dispatchEvent(new env.win.Event("click"));
   const col = $(node, '[data-station="s1"]')[0];
-  // Tapping a queued job on a BUSY station now asks before switching, rather
-  // than opening the card -- that is the mock's switch dialog.
-  assert.match(textOf(env.win.document.body), /Pause .* and start/);
-  assert.ok(!col.classList.contains("is-card"));
+  /* Tapping a queued job OPENS it -- on a busy station as much as on an open
+   * one. It used to ask "pause this and start that?", which is a question
+   * about starting work put to somebody who has only tapped to read. */
+  assert.ok(col.classList.contains("is-card"), "the card panel took the column");
+  assert.equal($(col, ".wf-cp").length, 1);
+  assert.ok(!/Pause .* and start/.test(textOf(env.win.document.body)),
+    "no dialog: looking is not a decision");
+  assert.equal(env.written.length, 0, "and nothing was written");
 });
 
 /* ========================================== one view at a time, in the column */
@@ -1179,6 +1253,96 @@ test("a job already signed shows the stamp instead of the checklist", async () =
   assert.match(textOf(col), /Scott VanWorkom/, "who actually looked at it");
 });
 
+/* ------------------------------------ a signature belongs to a bench, not a list
+ *
+ * qcRecord is keyed per card per LIST and the two finishing booths share one.
+ * Asking the bare question got the powder booth the BLAST booth's signature:
+ * it skipped its own checklist and offered to pass the job on, showing
+ * somebody else's name as the checker. Powder coat could ship with no powder
+ * QC at all and the record would look immaculate. Every read of a sign-off on
+ * this screen goes through signedHere(), which resolves the station's step
+ * first -- these two tests are what keeps that true.
+ */
+const BOOTHS = {
+  stations: [
+    { id: "f1", area: "finishing", table: "Blast booth", type: "blast",
+      welder: "kevinmoss", phase: "Sandblast / Powder Coat" },
+    { id: "f2", area: "finishing", table: "Powder booth", type: "powder",
+      welder: "scottv", phase: "Sandblast / Powder Coat" }
+  ],
+  visible: ["f1", "f2"]
+};
+
+/** Render, then switch to the Finishing bay screen the way a person would. */
+async function finishing(env) {
+  const node = await render(env, 1280);
+  $(node, ".wf-fl-tab")
+    .find((b) => /finishing/i.test(textOf(b)))
+    .dispatchEvent(new env.win.Event("click"));
+  return node;
+}
+
+test("the powder booth does not inherit the blast booth's sign-off", async () => {
+  // Blasted, so the job is the powder booth's now, and carrying the blast
+  // booth's signed record -- same card, same list, same qcRecord key.
+  const card = job("B", "LS", { claimed: SCOTT, running: true });
+  card.labelNames = ["Blasted"];
+  card.qcRecord = {
+    listId: "LS", status: "passed", mode: "floor", stepId: "blast",
+    signedAt: new Date().toISOString(),
+    signature: "Kevin Moss", signedBy: KEV,
+    rounds: [{ stepId: "blast", items: [{ text: "Profile fully stripped", spec: "" }] }]
+  };
+  const env = boot({ role: "worker", saved: BOOTHS, cards: [card] });
+  const node = await finishing(env);
+
+  const col = $(node, '[data-station="f2"]')[0];
+  assert.ok(col, "the powder booth has the job, because it is blasted");
+  $(col, ".wf-fl-ic")[1].dispatchEvent(new env.win.Event("click"));
+
+  const text = textOf($(node, '[data-station="f2"]')[0]);
+  assert.doesNotMatch(text, /QC passed/,
+    "the powder booth sees no signature, because nobody has checked the powder");
+  assert.doesNotMatch(text, /Kevin Moss/,
+    "and certainly not the blast booth's name presented as its own checker");
+  assert.match(text, /checklist|shipped draft/i, "it gets its own list to work");
+});
+
+test("the blast booth still sees the signature it took", async () => {
+  // Unblasted, so the job is still the blast booth's, and the record is its own.
+  const card = job("B", "LS", { claimed: KEV, running: true });
+  card.labelNames = [];
+  card.qcRecord = {
+    listId: "LS", status: "passed", mode: "floor", stepId: "blast",
+    signedAt: new Date().toISOString(),
+    signature: "Kevin Moss", signedBy: SCOTT,
+    rounds: [{ stepId: "blast", items: [{ text: "Profile fully stripped", spec: "" }] }]
+  };
+  const env = boot({ role: "worker", saved: BOOTHS, cards: [card] });
+  const node = await finishing(env);
+
+  const col = $(node, '[data-station="f1"]')[0];
+  $(col, ".wf-fl-ic")[1].dispatchEvent(new env.win.Event("click"));
+
+  const text = textOf($(node, '[data-station="f1"]')[0]);
+  assert.match(text, /QC passed/, "its own bench's signature still answers");
+  assert.match(text, /Scott VanWorkom/, "naming who actually looked at it");
+});
+
+test("every sign-off read on the Floor goes through signedHere", () => {
+  /* The five call sites were `WFQC.floorSignOff(st.job)` -- the bare question,
+   * with no bench in it. A sixth added later that asks the bare question again
+   * puts the bug straight back, and it would look like a passing suite. */
+  const src = read("popups/tabs/floor.js");
+  assert.match(src, /function signedHere\s*\(st\)/, "the helper exists");
+  const bare = src.match(/WFQC\.floorSignOff\s*\(/g) || [];
+  assert.equal(bare.length, 1,
+    "exactly one call to floorSignOff in this file, and it is the one inside " +
+    "signedHere that resolves the station's step first");
+  assert.match(src, /stepForStation\(st\.phase,\s*st\.station\.type\)/,
+    "and it resolves the step from the station it is standing at");
+});
+
 /* ================================================================== assign */
 
 test("Complete on a signed job asks before it ships, naming where it goes", async () => {
@@ -1268,28 +1432,840 @@ test("assign offers the phase's unstationed jobs, not somebody else's queue", as
     "taking a job off someone else's bench without telling them is not assigning");
 });
 
-/* ============================================================ the switch */
+/* =========================================== looking is free, taking is not
+ *
+ * THE TRAP THESE EXIST FOR. A tap on a queue tile used to call requestStart:
+ * on an open bench it started the clock on the spot, on a busy one it offered
+ * to pause the job in the welder's hands. Either way a welder reading the
+ * queue to decide what to pick up was making a decision about time by looking.
+ * A tap now opens the job and writes nothing; the footer button is the only
+ * thing on this screen that starts a clock.
+ */
 
-test("tapping a queued job on an open station starts it; on a busy one it asks", async () => {
-  const openEnv = boot({
+test("tapping a queued job opens a preview and writes nothing", async () => {
+  const env = boot({
     role: "worker", saved: ONE_STATION,
     cards: [job("Q", "LA", { pos: 10 })]
   });
-  let node = await render(openEnv, 1280);
-  assert.match(textOf(node), /Tap a job to start/);
+  const claims = spyClaims(env);
+  const node = await render(env, 1280);
+  assert.match(textOf(node), /Tap a job to look at it/, "the hint invites reading");
 
+  $(node, "button.wf-fl-t")[0].dispatchEvent(new env.win.Event("click"));
+  const col = $(node, '[data-station="s1"]')[0];
+  assert.ok(col.classList.contains("is-card"), "the job opened");
+  assert.match(textOf(col), /Before you start/);
+  assert.equal(env.written.length, 0, "looking records nothing");
+  assert.equal(claims.length, 0, "and claims nobody");
+  assert.equal(textOf(env.win.document.body).match(/Pause .* and start/), null,
+    "and asks nothing");
+});
+
+test("the preview's own button is what starts the job", async () => {
+  const env = boot({
+    role: "worker", saved: ONE_STATION,
+    cards: [job("Q", "LA", { pos: 10 })]
+  });
+  const claims = spyClaims(env);
+  const node = await render(env, 1280);
+  $(node, "button.wf-fl-t")[0].dispatchEvent(new env.win.Event("click"));
+  await settle(env);
+
+  const btn = footBtn($(node, '[data-station="s1"]')[0]);
+  assert.ok(btn, "the preview carries a button");
+  assert.match(textOf(btn), /Start this job/);
+
+  btn.dispatchEvent(new env.win.Event("click"));
+  await settle(env);
+  assert.equal(claims.length, 1, "THAT starts the clock");
+  assert.equal(claims[0].card, "Q");
+});
+
+test("on a busy bench the preview's button says what it will put down, and asks", async () => {
   const busyEnv = boot({
     role: "worker", saved: ONE_STATION,
     cards: [job("B", "LA", { claimed: KEV, running: true, pct: 65 }), job("Q", "LA", { pos: 10 })]
   });
-  node = await render(busyEnv, 1280);
-  assert.match(textOf(node), /Tap a job to switch/);
+  const node = await render(busyEnv, 1280);
 
   $(node, "button.wf-fl-t")[0].dispatchEvent(new busyEnv.win.Event("click"));
+  assert.equal(busyEnv.written.length, 0, "the tap alone still writes nothing");
+  await settle(busyEnv);
+
+  const btn = footBtn($(node, '[data-station="s1"]')[0]);
+  assert.match(textOf(btn), /Put down .* and start this/);
+
+  btn.dispatchEvent(new busyEnv.win.Event("click"));
   const body = textOf(busyEnv.win.document.body);
   assert.match(body, /Pause .* and start/);
   // The percentage has to be in the question: silently pausing somebody's work
   // is the kind of surprise that makes a shop stop trusting a screen.
   assert.match(body, /65%/);
   assert.equal(busyEnv.written.length, 0, "nothing happens until they answer");
+
+  /* AND SAYING NO LEAVES THEM AT THEIR BENCH. The preview is torn down when
+   * the button is pressed, so the column behind the dialog has to be the
+   * station again -- not the assign list, which is what a half-cleared preview
+   * fell through to. */
+  const col = $(node, '[data-station="s1"]')[0];
+  assert.ok(!/Assign to/.test(textOf(col)),
+    "changing your mind must not land you in the assign list");
+  assert.match(textOf(col), /Station #1/);
 });
+
+
+/* ====================================================== one tablet, one bench
+ *
+ * The shop is putting a cheap iPad at every bench, running this through
+ * Trello's mobile web client. A tablet bolted to Station #2 that shows four
+ * columns is a tablet somebody taps the wrong column on with a glove.
+ */
+
+/** Two benches, so "one column" means something. */
+const TWO_STATIONS = {
+  stations: [
+    { id: "s1", area: "shop", table: "Station #1", station: "Welding",
+      welder: "kevinmoss", phase: "Assemble Legacy" },
+    { id: "s2", area: "shop", table: "Station #2", station: "Welding",
+      welder: "scottv", phase: "Assemble Legacy" }
+  ],
+  visible: ["s1", "s2"]
+};
+
+const PAGE = "https://wfcustom.github.io/trello-crm-powerup/popups/ops.html";
+
+test("a pinned tablet shows its own bench and nothing else", async () => {
+  const env = boot({
+    role: "worker", saved: TWO_STATIONS, url: PAGE + "?station=s2",
+    cards: [job("B", "LA", { claimed: SCOTT, running: true, pct: 40 })]
+  });
+  const node = await render(env, 1280);
+
+  // One column, and it is the right one.
+  const cols = $(node, ".wf-fl-col");
+  assert.equal(cols.length, 1, "one bench, not the shop");
+  assert.equal(cols[0].getAttribute("data-station"), "s2");
+
+  // And none of the furniture that only makes sense on a shared screen.
+  assert.equal($(node, ".wf-fl-tabs").length, 0, "no area tabs");
+  assert.equal($(node, ".wf-fl-sum").length, 0, "no summary strip");
+  // The bar names the bench and whoever is rostered to it, so the tablet can
+  // be identified from across the shop without opening anything.
+  const bar = $(node, ".wf-fl-top")[0];
+  assert.match(textOf(bar), /Station #2/);
+  assert.match(textOf(bar), /Signed in as scottv/);
+  // A single column is laid out as one, whatever the screen is.
+  assert.equal(node.querySelector(".wf-fl-grid").style.gridTemplateColumns,
+    "minmax(0,1fr)");
+});
+
+test("the ?station= form of the pin is read, hash as well as query", async () => {
+  // The query string is what a home-screen shortcut carries.
+  let env = boot({ role: "worker", saved: TWO_STATIONS,
+                   url: PAGE + "?station=s1", cards: [] });
+  let node = await render(env, 1280);
+  assert.equal($(node, ".wf-fl-col").length, 1);
+  assert.equal($(node, ".wf-fl-col")[0].getAttribute("data-station"), "s1");
+
+  // Trello's own iframe URLs carry their arguments after the #, so the hash is
+  // searched too -- a pin that only worked in the query string would work on
+  // the bare page and silently stop working inside the Power-Up.
+  env = boot({ role: "worker", saved: TWO_STATIONS,
+               url: PAGE + "#station=s2", cards: [] });
+  node = await render(env, 1280);
+  assert.equal($(node, ".wf-fl-col")[0].getAttribute("data-station"), "s2");
+});
+
+test("a pin naming a bench that no longer exists falls back to the whole shop",
+  async () => {
+    /* A deleted station must not brick the tablet that was bolted to it, and
+       the person standing at that bench is a welder -- the only way back off a
+       pin is a manager-only button, so if this fell through to an empty screen
+       they would need somebody with a login to come and fix it. */
+    const env = boot({
+      role: "worker", saved: TWO_STATIONS, url: PAGE + "?station=s9",
+      cards: []
+    });
+    const node = await render(env, 1280);
+
+    assert.equal($(node, ".wf-fl-tabs").length, 1, "the normal view, with its tabs");
+    assert.equal($(node, ".wf-fl-col").length, 2, "every station, not none");
+    assert.ok(!/Nobody rostered to this bench/.test(textOf(node)),
+      "and not the pinned bar with nothing in it");
+  });
+
+test("a manager can pin this tablet, and un-pin it again", async () => {
+  const env = boot({ role: "manager", saved: TWO_STATIONS, cards: [] });
+  const node = await render(env, 1280);
+  assert.equal($(node, ".wf-fl-col").length, 2, "not pinned yet");
+
+  gear(node, "Pin this tablet to one station")
+    .dispatchEvent(new env.win.Event("click"));
+  const doc = env.win.document;
+  const sel = $(doc, "select")[0];
+  /* Every bench in the config is offered, plus the "not pinned" default --
+     including ones this area's grid is not currently showing. Deliberate: a
+     manager pinning a tablet is standing at the bench it is bolted to, and
+     "the station you want is not in this list because of a screen filter" is
+     not an answer anybody can act on. */
+  const options = $(sel, "option").map((o) => o.value);
+  assert.equal(options[0], "", "not pinned, first");
+  assert.ok(options.includes("s1") && options.includes("s2"));
+  assert.equal(new Set(options).size, options.length, "no bench listed twice");
+  // The permanent link is shown, because it is the only form of the pin that
+  // survives a browser clearing its storage.
+  sel.value = "s2";
+  sel.dispatchEvent(new env.win.Event("change"));
+  assert.match(textOf(doc.body), /\?station=s2/);
+
+  $(doc, "button").find((b) => textOf(b) === "Pin it")
+    .dispatchEvent(new env.win.Event("click"));
+  await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal($(node, ".wf-fl-col").length, 1, "pinned to one bench");
+  assert.equal(env.store.wfFloorStation, "s2", "and it survives a reload");
+
+  // Back out again, which is the only reason this device is ever usable for
+  // anything else.
+  gear(node, "Show every station").dispatchEvent(new env.win.Event("click"));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal($(node, ".wf-fl-col").length, 2);
+  assert.equal(env.store.wfFloorStation, undefined, "the pin is gone, not just hidden");
+});
+
+test("a pin saved against the member, with no URL and no storage, still pins",
+  async () => {
+    /* The third place the pin can live. about:blank is an opaque origin, so
+       jsdom's localStorage THROWS here exactly as Safari's does inside a
+       cross-site iframe -- which is the case this copy exists for. */
+    const env = boot({ role: "worker", saved: TWO_STATIONS, cards: [] });
+    env.store.wfFloorStation = "s1";
+    const node = await render(env, 1280);
+    assert.equal($(node, ".wf-fl-col").length, 1);
+    assert.equal($(node, ".wf-fl-col")[0].getAttribute("data-station"), "s1");
+  });
+
+test("the floor still draws when member-scoped plugin data cannot be read",
+  async () => {
+    // Trello hands back a rejection for a scope it will not give us; the floor
+    // is not allowed to care, because the pin is a convenience and the shop
+    // screen is not.
+    const env = boot({ role: "worker", saved: TWO_STATIONS, cards: [] });
+    const real = env.ctx.t.get;
+    env.ctx.t.get = (scope, vis, key, dflt) =>
+      scope === "member" ? Promise.reject(new Error("nope"))
+                         : real(scope, vis, key, dflt);
+    const node = await render(env, 1280);
+    assert.equal($(node, ".wf-fl-col").length, 2, "the shop floor, unpinned");
+    assert.ok(!/Couldn't read the shop floor/.test(textOf(node)));
+  });
+
+/* ============================================= whose name goes on the work
+ *
+ * A bench tablet is a shared device. Whoever happens to be signed in to it is
+ * not the answer to "who built this" -- the person rostered to that bench is.
+ */
+
+/** A job sitting on a bench that nobody has claimed: touched, but unowned. */
+function unclaimedOnBench(id, station) {
+  const c = job(id, "LA", { pos: 10 });
+  c.phaseWork = {
+    listId: "LA", claimedBy: null, tableId: station,
+    segments: [{ start: new Date(Date.now() - 20 * 60000).toISOString(),
+                 end: new Date(Date.now() - 5 * 60000).toISOString() }],
+    percentComplete: 0
+  };
+  return c;
+}
+
+/** Record who every claim is made for, instead of letting it hit the store. */
+function spyClaims(env) {
+  const claims = [];
+  env.win.WFPhase.claimAndStart = (t, card, member) => {
+    claims.push({ card: card.id, member });
+    return Promise.resolve({});
+  };
+  return claims;
+}
+
+test("Start claims the job for the bench's welder, not for the tablet's account",
+  async () => {
+    // Scott is signed in to the tablet bolted to Station #1. Kevin works it.
+    const env = boot({
+      role: "worker", saved: TWO_STATIONS, me: SCOTT,
+      cards: [unclaimedOnBench("B", "s1")]
+    });
+    const claims = spyClaims(env);
+    const node = await render(env, 1280);
+
+    const col = $(node, '[data-station="s1"]')[0];
+    $(col, ".wf-fl-btn").find((b) => /Start/.test(textOf(b)))
+      .dispatchEvent(new env.win.Event("click"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    assert.equal(claims.length, 1);
+    assert.equal(claims[0].member.username, "kevinmoss",
+      "the rostered welder, not whoever is signed in");
+    // And it is the board's own member record, so the claim carries an id that
+    // Trello will accept rather than a name scraped off the roster.
+    assert.equal(claims[0].member, KEV);
+  });
+
+test("a job started from the queue preview claims for the bench's welder too", async () => {
+  // Scott is signed in to the tablet bolted to Station #1. Kevin works it.
+  const env = boot({
+    role: "worker", saved: TWO_STATIONS, me: SCOTT,
+    cards: [job("Q", "LA", { pos: 10 })]
+  });
+  const claims = spyClaims(env);
+  const node = await render(env, 1280);
+
+  const col = $(node, '[data-station="s1"]')[0];
+  $(col, "button.wf-fl-t")[0].dispatchEvent(new env.win.Event("click"));
+  await settle(env);
+  assert.equal(claims.length, 0, "the tap itself claims nobody");
+
+  footBtn($(node, '[data-station="s1"]')[0]).dispatchEvent(new env.win.Event("click"));
+  await settle(env);
+
+  assert.equal(claims.length, 1, "the preview's button claims as well as Start does");
+  assert.equal(claims[0].member.username, "kevinmoss",
+    "the rostered welder, not whoever is signed in");
+});
+
+test("an unstaffed bench claims for whoever is standing at it", async () => {
+  // Nobody rostered. Refusing would leave a welder at a bench with a job on it
+  // and no way to begin; an imprecise name beats a job nobody can start.
+  const empty = {
+    stations: [{ id: "s1", area: "shop", table: "Station #1", station: "Welding",
+                 welder: "", phase: "Assemble Legacy" }],
+    visible: ["s1"]
+  };
+  const env = boot({ role: "worker", saved: empty, me: SCOTT,
+                     cards: [unclaimedOnBench("B", "s1")] });
+  const claims = spyClaims(env);
+  const node = await render(env, 1280);
+
+  $(node, ".wf-fl-btn").find((b) => /Start/.test(textOf(b)))
+    .dispatchEvent(new env.win.Event("click"));
+  await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal(claims.length, 1);
+  assert.equal(claims[0].member, SCOTT, "the signed-in member");
+});
+
+test("a roster naming somebody who has left the board falls back, never to a stub",
+  async () => {
+    /* The failure this guards: a welder who left is still typed into the
+       station config, so the lookup finds nothing. Claiming for a name rather
+       than a member would write {id:undefined, username:undefined} onto the
+       card -- a claim nobody can be held to and nothing can resolve. */
+    const gone = {
+      stations: [{ id: "s1", area: "shop", table: "Station #1", station: "Welding",
+                   welder: "someonewholeft", phase: "Assemble Legacy" }],
+      visible: ["s1"]
+    };
+    const env = boot({ role: "worker", saved: gone, me: SCOTT,
+                       cards: [unclaimedOnBench("B", "s1")] });
+    const claims = spyClaims(env);
+    const node = await render(env, 1280);
+
+    $(node, ".wf-fl-btn").find((b) => /Start/.test(textOf(b)))
+      .dispatchEvent(new env.win.Event("click"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    assert.equal(claims.length, 1);
+    assert.equal(claims[0].member, SCOTT);
+    assert.ok(claims[0].member.username, "a real member, not a name-shaped object");
+  });
+
+/* ======================================== un-pinning has to outlive a Refresh
+ *
+ * writePin can clear localStorage and it can clear the member-private copy, but
+ * it cannot clear a query string -- and ?station=s2 is the form we actively
+ * recommend, because a home-screen shortcut carries it. So the manager who
+ * tapped ⤢ to get the shop back, then tapped Refresh (the single most likely
+ * next tap, and the one right beside it), watched the tablet silently re-pin
+ * itself out of its own bookmark.
+ *
+ * The sentinel is three-valued on purpose: null is "haven't looked yet", a
+ * string is a bench, and FALSE is "un-pinned, deliberately, this session".
+ * Both halves below are intended behaviour and both are asserted, because
+ * fixing either one by itself would be a regression in the other.
+ */
+
+test("un-pinning survives a Refresh, even when the pin came from the URL",
+  async () => {
+    const env = boot({ role: "manager", saved: TWO_STATIONS,
+                       url: PAGE + "?station=s2", cards: [] });
+    const node = await render(env, 1280);
+    assert.equal($(node, ".wf-fl-col").length, 1, "the bookmark pinned it");
+
+    gear(node, "Show every station").dispatchEvent(new env.win.Event("click"));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal($(node, ".wf-fl-col").length, 2, "un-pinned: the whole shop");
+
+    // The tap that used to undo it.
+    const refreshBtn = $(node, "button").find((b) => textOf(b) === "Refresh");
+    assert.ok(refreshBtn, "the shared top bar carries Refresh");
+    refreshBtn.dispatchEvent(new env.win.Event("click"));
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+
+    assert.equal($(node, ".wf-fl-col").length, 2,
+      "STILL every station -- the bookmark does not re-pin it mid-session");
+    assert.equal($(node, ".wf-fl-tabs").length, 1, "and the area tabs are still there");
+    assert.ok(!/Nobody rostered to this bench/.test(textOf(node)));
+  });
+
+test("but a fresh boot at the same bookmark pins again -- the URL is authoritative",
+  async () => {
+    /* The complementary half, and it is NOT the bug. A bench tablet that
+       forgets its bench after a power cut is worse than one a manager has to
+       un-pin twice: the un-pin is session-scoped, the bookmark is forever. */
+    const first = boot({ role: "manager", saved: TWO_STATIONS,
+                         url: PAGE + "?station=s2", cards: [] });
+    const a = await render(first, 1280);
+    gear(a, "Show every station").dispatchEvent(new first.win.Event("click"));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal($(a, ".wf-fl-col").length, 2, "un-pinned in that session");
+
+    // A reload: a brand new page at the same URL, so a brand new module state.
+    const second = boot({ role: "manager", saved: TWO_STATIONS,
+                          url: PAGE + "?station=s2", cards: [] });
+    const b = await render(second, 1280);
+    assert.equal($(b, ".wf-fl-col").length, 1, "pinned again, from the bookmark");
+    assert.equal($(b, ".wf-fl-col")[0].getAttribute("data-station"), "s2");
+  });
+
+test("the floor still draws when t.get THROWS for the member scope", async () => {
+  /* Not a rejected promise -- a SYNCHRONOUS throw, which is what a `t` that
+     does not implement member scope at all actually does. Thrown from inside
+     the Promise.all array literal it escapes before the array is built, so
+     neither the .catch on the member read nor the one on the end of the chain
+     exists yet to see it: the whole Floor tab died, with no error panel and no
+     Try again, because a tablet could not remember which bench it was. */
+  const env = boot({ role: "worker", saved: TWO_STATIONS, cards: [] });
+  const real = env.ctx.t.get;
+  env.ctx.t.get = (scope, vis, key, dflt) => {
+    if (scope === "member") throw new Error("this t has no member scope");
+    return real(scope, vis, key, dflt);
+  };
+
+  const node = await render(env, 1280);
+  assert.equal($(node, ".wf-fl-col").length, 2, "the shop floor, unpinned");
+  assert.ok(!/Couldn't read the shop floor/.test(textOf(node)),
+    "and not the error panel either");
+});
+
+/* ================================= the worker and the signer are two people
+ *
+ * `worker` is who did the work: on a tablet bolted to Station #2 that is
+ * whoever is standing at Station #2, not whoever the device happens to be
+ * signed in as. `signedBy` is who vouched for it, and it is chosen by hand
+ * from the dropdown with NO default -- the two being different people is the
+ * entire point of a peer check, and a "helpful" default would quietly turn
+ * every sign-off into a self-check that reads like a peer one.
+ */
+
+test("QC records the bench as the worker and the dropdown as the signer",
+  async () => {
+    // Signed in as Scott, standing at Kevin's bench: the three candidate names
+    // are all different, so each assertion can only pass for its own reason.
+    const env = boot({
+      role: "worker", saved: ONE_STATION, me: SCOTT, members: [KEV, SCOTT],
+      cards: [job("B", "LA", { claimed: KEV, running: true })]
+    });
+    const node = await render(env, 1280);
+    $(node, ".wf-fl-ic")[1].dispatchEvent(new env.win.Event("click"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const col = () => $(node, '[data-station="s1"]')[0];
+    const click = (el) => el.dispatchEvent(new env.win.Event("click"));
+    const signBtn = () => $(col(), ".wf-fl-panel button.wf-fl-done")[0];
+
+    click($(col(), ".wf-fl-allrow button")[0]);          // Check all
+    const sig = $(col(), ".wf-fl-panel input.wf-fl-input")[0];
+    sig.value = "Scott VanWorkom";
+    sig.dispatchEvent(new env.win.Event("input"));
+
+    /* THE TEST THAT FAILS IF SOMEBODY LATER DEFAULTS THE SIGNER.
+       Every line ticked and a name typed: the signer is the only thing left in
+       the way, and it has to stay in the way until a human picks one. */
+    assert.equal($(col(), ".wf-fl-panel .wf-fl-sel")[0].value, "",
+      "the signer dropdown starts on nobody -- not the bench welder, not the device");
+    assert.equal(signBtn().disabled, true, "and it will not sign without one");
+    assert.match(textOf(col()), /who signed off/i, "the hint says that is why");
+    assert.equal(env.written.length, 0, "nothing written on a list with no signer");
+
+    const who = $(col(), ".wf-fl-panel .wf-fl-sel")[0];
+    who.value = "scottv";
+    who.dispatchEvent(new env.win.Event("change"));
+    assert.equal(signBtn().disabled, false, "chosen by hand, so now it can go");
+
+    click(signBtn());
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+
+    const rec = env.store.qcRecord;
+    assert.ok(rec, "the sign-off landed");
+    assert.equal(rec.status, "passed");
+    // Who vouched for it: the dropdown, untouched by FIX 4.
+    assert.equal(rec.signedBy.username, "scottv");
+    assert.equal(rec.rounds[rec.rounds.length - 1].signedBy.username, "scottv",
+      "and the round carries the same signer");
+    // Who did it: the BENCH's welder, not the account the tablet is signed in
+    // as -- which here is the signer, so a regression to ctx.member collapses
+    // the two names into one and this fails.
+    assert.equal(rec.requestedBy.username, "kevinmoss",
+      "the work is attributed to the bench, not to the device");
+    assert.notEqual(rec.requestedBy.username, rec.signedBy.username,
+      "a peer check is two people; the moment it is one, it is a self-check");
+  });
+
+test("a recorded fault is attributed to the bench too, not to the device",
+  async () => {
+    // recordFaults and signOff are separate functions and FIX 4 touched both.
+    // Asserting only the sign-off path would leave half of it uncovered.
+    const env = boot({
+      role: "worker", saved: ONE_STATION, me: SCOTT, members: [KEV, SCOTT],
+      cards: [job("B", "LA", { claimed: KEV, running: true })]
+    });
+    const node = await render(env, 1280);
+    $(node, ".wf-fl-ic")[1].dispatchEvent(new env.win.Event("click"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const col = () => $(node, '[data-station="s1"]')[0];
+    const click = (el) => el.dispatchEvent(new env.win.Event("click"));
+    click($(col(), ".wf-fl-ck .wf-fl-box")[0]);   // pass
+    click($(col(), ".wf-fl-ck .wf-fl-box")[0]);   // fail
+
+    const note = $(col(), ".wf-fl-ck.is-bad input.wf-fl-input")[0];
+    note.value = "twisted 3mm across the diagonal";
+    note.dispatchEvent(new env.win.Event("input"));
+    click($(col(), "[data-fault-btn]")[0]);
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+
+    const rec = env.store.qcRecord;
+    assert.ok(rec, "the fault landed on the card");
+    assert.equal(rec.requestedBy.username, "kevinmoss",
+      "whoever found it was standing at the bench, whatever the tablet is signed in as");
+  });
+
+/* ======================================================== the whole shop
+ *
+ * A tablet pinned to one bench showed that bench's queue and nothing else, so
+ * a welder who got ahead could see no work to pull: the Full queue is this
+ * bench's, and the assign list only ever offers jobs on NO bench. Getting
+ * ahead meant standing still until somebody told you what was next.
+ */
+
+/** A job sitting on a named bench, optionally part-way through somebody's day. */
+function onBench(id, station, opts = {}) {
+  const c = job(id, "LA", { pos: opts.pos === undefined ? 10 : opts.pos, name: opts.name });
+  c.phaseWork = {
+    listId: "LA",
+    claimedBy: opts.by || null,
+    tableId: station,
+    segments: opts.started
+      ? [{ start: new Date(Date.now() - 45 * 60000).toISOString(), end: null }]
+      : [],
+    percentComplete: opts.pct || 0
+  };
+  return c;
+}
+
+/** Open the shop view on a column and hand back a live reader for it. */
+async function openShop(env, node, stationId = "s1") {
+  const col = () => $(node, '[data-station="' + stationId + '"]')[0];
+  $(col(), ".wf-fl-link").find((b) => /Whole shop/.test(textOf(b)))
+    .dispatchEvent(new env.win.Event("click"));
+  await settle(env, 2);
+  return col;
+}
+
+test("the shop view groups by bench, this bench first, and names the others", async () => {
+  const env = boot({
+    role: "worker", saved: TWO_STATIONS, me: KEV,
+    cards: [
+      onBench("HERE", "s1", { name: "#2401 waiting on my bench" }),
+      onBench("THERE", "s2", { name: "#2402 on Scott's bench", by: SCOTT,
+                               started: true, pct: 30 }),
+      job("LOOSE", "LA", { pos: 30, name: "#2403 on no bench" })
+    ]
+  });
+  const node = await render(env, 1280);
+  const col = await openShop(env, node);
+  const text = textOf(col());
+
+  assert.match(text, /The whole shop/, "the header says where you are");
+  assert.match(text, /#2402 on Scott's bench/,
+    "another bench's work is visible -- that is the whole point");
+  assert.match(text, /Station #2/, "and it is attributed to that bench by name");
+  assert.match(text, /On no bench yet/);
+  assert.match(text, /30% done/, "with how far along it is, before anybody taps");
+
+  // This bench first: most of the time the answer is already here.
+  assert.ok(text.indexOf("Waiting here") < text.indexOf("Station #2"),
+    "your own bench leads");
+  assert.ok(text.indexOf("Station #2") < text.indexOf("On no bench yet"),
+    "and an unowned pile is last");
+  assert.equal(env.written.length, 0, "looking at the shop writes nothing");
+});
+
+test("the shop view offers the link on an empty bench, which is when it is needed",
+  async () => {
+    const env = boot({ role: "worker", saved: TWO_STATIONS, cards: [] });
+    const node = await render(env, 1280);
+    const col = $(node, '[data-station="s1"]')[0];
+    assert.ok($(col, ".wf-fl-link").some((b) => /Whole shop/.test(textOf(b))),
+      "an empty bench is exactly when somebody needs somewhere to look");
+  });
+
+test("Bring it here moves an unstarted job onto this bench", async () => {
+  const env = boot({
+    role: "worker", saved: TWO_STATIONS, me: KEV,
+    cards: [onBench("THERE", "s2", { name: "#2402 nobody has started" })]
+  });
+  const moves = [];
+  env.win.WFTables.setStation = (t, card, stationId, pos) => {
+    moves.push({ card: card.id, stationId, pos });
+    return Promise.resolve({});
+  };
+  const node = await render(env, 1280);
+  const col = await openShop(env, node);
+
+  const take = $(col(), ".wf-fl-btn").find((b) => /Bring it here/.test(textOf(b)));
+  assert.ok(take, "an unstarted job is brought over, not taken off anybody");
+  assert.ok(!take.disabled);
+
+  take.dispatchEvent(new env.win.Event("click"));
+  await settle(env);
+  assert.deepEqual(moves.map((m) => [m.card, m.stationId]), [["THERE", "s1"]]);
+  assert.equal($(env.win.document.body, ".wf-panel-t")
+    .filter((n) => /Take .* from/.test(textOf(n))).length, 0,
+    "unclaimed work moves with no dialog -- there is nobody to ask");
+});
+
+/* CLAIMED BUT NEVER STARTED IS STILL SOMEBODY'S JOB.
+ *
+ * No time moves with it, so nothing is lost -- but it was given to a person,
+ * and pulling it onto another bench without a word means they go looking for
+ * their next job and find it gone. Between the two existing cases (unclaimed:
+ * take it; started: confirm, with a percentage) this one used to fall silently
+ * into the first. */
+test("Bring it here asks first when the job is claimed, and names who has it",
+  async () => {
+    const env = boot({
+      role: "worker", saved: TWO_STATIONS, me: KEV,
+      cards: [onBench("THERE", "s2",
+        { name: "#2402 Scott's, not started", by: SCOTT })]
+    });
+    const moves = [];
+    env.win.WFTables.setStation = (t, card, stationId, pos) => {
+      moves.push({ card: card.id, stationId, pos });
+      return Promise.resolve({});
+    };
+    const node = await render(env, 1280);
+    const col = await openShop(env, node);
+
+    const take = $(col(), ".wf-fl-btn").find((b) => /Bring it here/.test(textOf(b)));
+    assert.ok(take, "nothing has been worked, so it is still a Bring, not a Take");
+    assert.ok(!take.disabled, "and it needs no permission -- no hours are at stake");
+
+    take.dispatchEvent(new env.win.Event("click"));
+    await settle(env, 2);
+    const body = textOf(env.win.document.body);
+    assert.match(body, /from Scott/, "it names whose bench it is coming off");
+    assert.match(body, /has not started it/,
+      "and says why this is cheaper than taking live work");
+    assert.equal(moves.length, 0, "nothing moves until they answer");
+    assert.equal(env.written.length, 0);
+
+    // Declining has to leave the job exactly where it was.
+    const leave = $(env.win.document.body, ".wf-btn")
+      .find((b) => /Leave it with Scott/.test(textOf(b)));
+    assert.ok(leave, "backing out is offered in the shop's own words");
+    leave.dispatchEvent(new env.win.Event("click"));
+    await settle(env);
+
+    assert.equal(moves.length, 0, "declining writes nothing at all");
+    assert.equal(env.written.length, 0);
+    assert.ok(!/has not started it/.test(textOf(env.win.document.body)),
+      "and the dialog is gone");
+  });
+
+test("saying yes to a claimed-but-unstarted job moves it, once", async () => {
+  const env = boot({
+    role: "worker", saved: TWO_STATIONS, me: KEV,
+    cards: [onBench("THERE", "s2", { name: "#2402 Scott's, not started", by: SCOTT })]
+  });
+  const moves = [];
+  env.win.WFTables.setStation = (t, card, stationId, pos) => {
+    moves.push({ card: card.id, stationId, pos });
+    return Promise.resolve({});
+  };
+  const node = await render(env, 1280);
+  const col = await openShop(env, node);
+
+  $(col(), ".wf-fl-btn").find((b) => /Bring it here/.test(textOf(b)))
+    .dispatchEvent(new env.win.Event("click"));
+  await settle(env, 2);
+
+  const go = $(env.win.document.body, ".wf-btn")
+    .filter((b) => /^Bring it here$/.test(textOf(b).trim()))
+    .pop();
+  assert.ok(go, "the confirm repeats the verb, so nobody has to re-read the row");
+  go.dispatchEvent(new env.win.Event("click"));
+  await settle(env);
+
+  assert.deepEqual(moves.map((m) => [m.card, m.stationId]), [["THERE", "s1"]]);
+});
+
+test("a job somebody is part-way through offers to be TAKEN, and says whose it is",
+  async () => {
+    const env = boot({
+      role: "worker", saved: TWO_STATIONS, me: KEV,
+      cards: [onBench("THERE", "s2", { by: SCOTT, started: true, pct: 30 })]
+    });
+    const node = await render(env, 1280);
+    const col = await openShop(env, node);
+
+    const take = $(col(), ".wf-fl-btn").find((b) => /Take it on/.test(textOf(b)));
+    assert.ok(take, "taking live work is a different act and reads as one");
+    assert.match(textOf(col()), /Scott VanWorkom/);
+
+    take.dispatchEvent(new env.win.Event("click"));
+    const body = textOf(env.win.document.body);
+    assert.match(body, /Take .* from Scott/, "it asks first, naming whose job it is");
+    assert.match(body, /30%/, "and how far along they are");
+    assert.equal(env.written.length, 0, "nothing moves until they answer");
+  });
+
+test("without job.assign, taking live work off somebody is refused, not hidden",
+  async () => {
+    const env = boot({
+      role: "worker", saved: TWO_STATIONS, me: KEV,
+      can: () => false,
+      cards: [
+        onBench("THERE", "s2", { by: SCOTT, started: true, pct: 30 }),
+        job("LOOSE", "LA", { pos: 30, name: "#2403 on no bench" })
+      ]
+    });
+    const node = await render(env, 1280);
+    const col = await openShop(env, node);
+
+    const take = $(col(), ".wf-fl-btn").find((b) => /Take it on/.test(textOf(b)));
+    assert.ok(take.disabled, "somebody else's half-done job is not yours to take");
+    assert.match(take.getAttribute("title") || "", /part-way through/);
+
+    /* BUT THE LOOKING IS NEVER GATED, and unclaimed work is still free to
+     * pull. A shop floor that cannot see its own queue is the problem this
+     * screen exists to fix. */
+    assert.match(textOf(col()), /#2403 on no bench/);
+    const free = $(col(), ".wf-fl-btn").find((b) => /Bring it here/.test(textOf(b)));
+    assert.ok(free && !free.disabled, "unclaimed work needs no permission");
+  });
+
+test("the shop view leaves out finished work and the job already on this bench",
+  async () => {
+    const done = onBench("DONE", "s2", { name: "#2410 finished", by: SCOTT, pct: 100 });
+    done.phaseWork.completedAt = new Date().toISOString();
+    const env = boot({
+      role: "worker", saved: TWO_STATIONS, me: KEV,
+      cards: [
+        job("B", "LA", { claimed: KEV, running: true, name: "#2400 in my hands" }),
+        done
+      ]
+    });
+    const node = await render(env, 1280);
+    const col = await openShop(env, node);
+    const text = textOf(col());
+    assert.ok(!/#2410 finished/.test(text), "work that is done is not work to pull");
+    assert.ok(!/#2400 in my hands/.test(text), "nor is the job already on this bench");
+  });
+
+test("looking at a shop job and backing out returns to the shop list, not the bench",
+  async () => {
+    const env = boot({
+      role: "worker", saved: TWO_STATIONS, me: KEV,
+      cards: [onBench("THERE", "s2", { name: "#2402 somewhere else" })]
+    });
+    const node = await render(env, 1280);
+    const col = await openShop(env, node);
+
+    $(col(), ".wf-fl-link").find((b) => /Look at it/.test(textOf(b)))
+      .dispatchEvent(new env.win.Event("click"));
+    await settle(env);
+    assert.ok(col().classList.contains("is-card"), "it opened");
+
+    $(col(), ".wf-cp-x")[0].dispatchEvent(new env.win.Event("click"));
+    await settle(env, 2);
+    assert.match(textOf(col()), /The whole shop/,
+      "a list you were reading is a place, and the × gives it back");
+  });
+
+/* ============================ the two previews are not the same preview
+ *
+ * One panel serves both, and which one you are in is inferred from whether
+ * previewCta names the card on screen. The two maps behind that -- previewing
+ * and previewCta -- have to move together, because getting it wrong puts a
+ * button that STARTS A CLOCK on the assign list, whose entire premise is that
+ * putting a job on a bench is not the same as working on it.
+ */
+test("a preview opened from the assign list carries no start button", async () => {
+  const env = boot({
+    role: "worker", saved: ONE_STATION, me: KEV,
+    cards: [job("Q", "LA", { pos: 10, name: "#2444 unassigned" })]
+  });
+  const node = await render(env, 1280);
+  const col = () => $(node, '[data-station="s1"]')[0];
+
+  // Look at it from the queue first, so previewCta knows this exact card.
+  $(col(), "button.wf-fl-t")[0].dispatchEvent(new env.win.Event("click"));
+  await settle(env);
+  assert.ok(footBtn(col()), "the queue preview does commit");
+  $(col(), ".wf-cp-x")[0].dispatchEvent(new env.win.Event("click"));
+  await settle(env, 2);
+
+  // Now the same card, from the assign list.
+  $(col(), ".wf-fl-assign")[0].dispatchEvent(new env.win.Event("click"));
+  await settle(env, 2);
+  $(col(), ".wf-fl-link").find((b) => /Preview/.test(textOf(b)))
+    .dispatchEvent(new env.win.Event("click"));
+  await settle(env);
+
+  assert.ok(col().classList.contains("is-card"), "it opened");
+  assert.equal(footBtn(col()), undefined,
+    "assigning is a scheduling decision; starting is not on this screen");
+  assert.ok(!/Before you start/.test(textOf(col())), "nor does it read like one");
+
+  // And the way out is the list you came from, not the bench.
+  $(col(), ".wf-cp-x")[0].dispatchEvent(new env.win.Event("click"));
+  await settle(env, 2);
+  assert.match(textOf(col()), /Assign to/);
+});
+
+test("the shop view keeps the blast booth's work out of the powder booth's list",
+  async () => {
+    /* TWO BENCHES BEHIND ONE TRELLO COLUMN. Both booths pull "Sandblast /
+     * Powder Coat" because that is the only list there is, and which of the
+     * two owns a job is decided by a label. A shop list that ignores the split
+     * offers the powder operator jobs that have not been blasted yet -- work
+     * they cannot do, in a list whose whole purpose is "what can I pull next".
+     */
+    const raw = job("RAW", "LS", { pos: 10, name: "#2500 not blasted yet" });
+    const blasted = job("BLASTED", "LS", { pos: 20, name: "#2501 ready for powder" });
+    blasted.labelNames = ["Blasted"];
+
+    const env = boot({ role: "worker", saved: BOOTHS, cards: [raw, blasted] });
+    const node = await finishing(env);
+
+    const blast = await openShop(env, node, "f1");
+    assert.match(textOf(blast()), /#2500 not blasted yet/);
+    assert.ok(!/#2501 ready for powder/.test(textOf(blast())),
+      "the blast booth is not offered work that is already blasted");
+
+    const powder = await openShop(env, node, "f2");
+    assert.match(textOf(powder()), /#2501 ready for powder/);
+    assert.ok(!/#2500 not blasted yet/.test(textOf(powder())),
+      "and the powder booth is not offered work nobody has blasted");
+  });

@@ -216,7 +216,12 @@
     }
 
     wrap.appendChild(O.el("div.wf-stats", null,
-      O.stat("Hours logged", Math.round(s.hours), s.entries + " finished phases"),
+      /* `s.phases`, NOT `s.entries`. A phase that changed hands emits one row
+       * per person so the hours land on the right names, so `s.entries` is a
+       * ROW count -- it read a two-person CAD job as "2 finished phases" under
+       * a correct hours figure, which is the combination most likely to be
+       * believed. `s.phases` counts distinct (card, phase, step, when). */
+      O.stat("Hours logged", Math.round(s.hours), s.phases + " finished phases"),
       O.stat("Jobs touched", Object.keys(s.byJob).length, "in this period"),
       O.stat("Hours per $1,000",
         s.hoursPerThousand === null ? "—" : round1(s.hoursPerThousand),
@@ -281,6 +286,10 @@
    */
   function openExport(entries) {
     var csv = WFRecords.toCSV(entries);
+    // Rows and phases are not the same number once a phase has changed hands,
+    // and the CSV has one row per person -- so the dialog counts the phases
+    // the export is ABOUT, the same figure the headline above it shows.
+    var phases = WFRecords.timeSummary(entries).phases;
     var box = O.el("textarea.wf-rec-csv", { readonly: true, spellcheck: "false" });
     box.value = csv;
 
@@ -294,7 +303,7 @@
 
     var dlg = O.dialog({
       title: "Export the time log",
-      note: entries.length + " finished phases",
+      note: phases + " finished phases",
       content: body,
       buttons: [{
         label: "Download CSV",

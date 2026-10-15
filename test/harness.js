@@ -51,6 +51,7 @@ const LOAD_ORDER = [
   "lib/advance.js",
   "lib/sop.js",
   "lib/eos.js",
+  "lib/steps.js",
   "lib/tables.js",
   "lib/aging.js",
   "lib/records.js",

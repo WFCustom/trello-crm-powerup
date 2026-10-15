@@ -8,7 +8,7 @@
  * A tab render() gets a ctx:
  *   ctx.t          Trello iframe handle
  *   ctx.board      { id, name, members }
- *   ctx.member     { username, fullName }
+ *   ctx.member     { id, username, fullName }
  *   ctx.boardCfg   WFStage.getBoardConfig(board.id)  (may be null)
  *   ctx.roster     { managers, phaseSpecialists }
  *   ctx.isManager  bool
@@ -593,9 +593,23 @@
         WFRest.getBoardCardsFull(t, ctx.board.id, opts || {}),
         // Pricing lives in the "$Value" custom field that sales already keeps
         // up to date. Never let a pricing failure take the whole view down.
-        WFPricing.getBoardValues(t, ctx.board.id, opts || {}).catch(function () { return {}; })
+        WFPricing.getBoardValues(t, ctx.board.id, opts || {}).catch(function () { return {}; }),
+        /* Board labels, so a card's labels can be read by NAME.
+         *
+         * A job's position inside a split phase -- blasted or not yet -- is
+         * carried by a label, and getBoardCardsFull returns label IDS. Joining
+         * them here once means WFTables.stationState stays a pure function of
+         * cards and config instead of every caller having to fetch labels.
+         * A failure costs the split, not the board: every job then reads as
+         * being at the first step, which is visibly wrong rather than silently
+         * wrong. */
+        WFRest.getBoardLabels(t, ctx.board.id).catch(function () { return []; })
       ]).then(function (r) {
         var list = r[0] || [], byCard = r[1] || {};
+        ctx.boardLabels = r[2] || [];
+        list.forEach(function (c) {
+          c.labelNames = WFSteps.namesOn(c, ctx.boardLabels);
+        });
         list.forEach(function (c) {
           var fromField = byCard[c.id];
           if (fromField == null) return;
@@ -1350,7 +1364,23 @@
 
       return Promise.all([
         t.board("id", "name", "members"),
-        t.member("username", "fullName"),
+        /* "id" matters, and its absence was invisible.
+         *
+         * WFPhase.claimAndStart writes `claimedBy: { id: member.id, ... }`, so
+         * without it every claim made from this window carried `id: undefined`,
+         * and addMemberToCard was called with undefined (swallowed by its own
+         * try/catch, so nothing said so).
+         *
+         * The card surfaces fetch their own member WITH an id and then test
+         * `claimedBy.id === member.id`. `undefined === "realId"` is false, so
+         * that check answered NO for every job claimed through here -- hiding
+         * Accept, Decline and Start from the one person they belonged to, on
+         * the back of their own card.
+         *
+         * Claims written before this fix still carry the undefined id and will
+         * keep failing that check until the job is claimed again. Nothing is
+         * lost by it; the card back just will not offer those buttons. */
+        t.member("id", "username", "fullName"),
         WFRoster.getRoster(t).catch(function () { return { managers: [], phaseSpecialists: {} }; }),
         t.get("board", "shared", BOARD_ORDER_KEY, null).catch(function () { return null; }),
         t.get("member", "private", MY_ORDER_KEY, null).catch(function () { return null; }),

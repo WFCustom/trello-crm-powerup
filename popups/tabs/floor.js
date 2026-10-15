@@ -309,7 +309,67 @@
 
   /* Module-level so switching tabs and coming back keeps you on the same
      screen, and so the timers below have something stable to clean up. */
-  var state = { area: "shop", cfg: null, cards: null, host: null, ctx: null, scale: null };
+  var state = { area: "shop", cfg: null, cards: null, host: null, ctx: null,
+                scale: null, pinned: null };
+
+  /* ============================================ one tablet, one bench
+   *
+   * A tablet at Station #2 should show Station #2. Not four columns to tap the
+   * right one out of, not the finishing bay by accident -- the bench it is
+   * bolted to, every time it wakes up, filling the screen.
+   *
+   * WHY IT IS LOOKED UP IN THREE PLACES
+   *
+   * There is no single storage that works everywhere this runs, so it tries
+   * each in turn and the first answer wins:
+   *
+   *   the URL      ?station=s2 -- the only one that survives everything. A
+   *                home-screen shortcut carries it, so the pin is in the
+   *                bookmark rather than in any storage a browser might clear.
+   *   localStorage per device, which is exactly the right scope. Safari blocks
+   *                it inside a cross-site iframe though, so it cannot be the
+   *                only answer while this runs inside Trello.
+   *   member data  per Trello account, which only distinguishes tablets if each
+   *                is signed in separately -- true here, since a bench tablet
+   *                is signed in as the welder who works it.
+   *
+   * Any of them can fail without the floor failing: no pin just means the
+   * normal multi-station view, which is what a manager at a desk wants anyway.
+   */
+  var PIN_KEY = "wfFloorStation";
+
+  function readPin() {
+    try {
+      var q = (window.location.search || "") + (window.location.hash || "");
+      var m = /[?&#]station=([A-Za-z0-9_-]+)/.exec(q);
+      if (m) return m[1];
+    } catch (e) { /* no URL to read is not an error */ }
+    try {
+      var v = window.localStorage && window.localStorage.getItem(PIN_KEY);
+      if (v) return v;
+    } catch (e) { /* Safari blocks storage in a third-party iframe */ }
+    return null;
+  }
+
+  function writePin(id) {
+    try {
+      if (id) window.localStorage.setItem(PIN_KEY, id);
+      else window.localStorage.removeItem(PIN_KEY);
+    } catch (e) { /* best effort: the member-data copy below is the backstop */ }
+    // Member-private, so one bench tablet's pin never lands on another's.
+    return Promise.resolve(
+      id ? state.ctx.t.set("member", "private", PIN_KEY, id)
+         : state.ctx.t.remove("member", "private", PIN_KEY)
+    ).catch(function () { /* the pin is a convenience, not a record */ });
+  }
+
+  /** The pinned station as an object, or null if the pin names nothing real. */
+  function pinnedStation() {
+    if (!state.pinned || !state.cfg) return null;
+    return (state.cfg.stations || []).filter(function (s) {
+      return s.id === state.pinned;
+    })[0] || null;
+  }
 
   /**
    * One interval and one resize handler for the whole tab, replaced rather than
@@ -368,6 +428,31 @@
     stopTimers();
     state.host.innerHTML = "";
     state.host.className = "wf-fl";
+
+    /* A PINNED TABLET SHOWS ITS OWN BENCH AND NOTHING ELSE.
+     *
+     * Not the area tabs, not the summary strip, not three other columns to tap
+     * by mistake with a glove on. The welder at Station #2 has exactly one
+     * question -- what am I building and what is next -- and every other pixel
+     * on the screen is a chance to answer a different one.
+     *
+     * A pin naming a station that no longer exists falls through to the normal
+     * view rather than showing an empty screen: a deleted bench should not
+     * brick the tablet that was bolted to it.
+     */
+    var pin = pinnedStation();
+    if (pin) {
+      add(state.host, pinnedBar(pin));
+      var one = WFTables.stationState(state.ctx.boardCfg, state.cards, pin);
+      var wrap = O.el("div.wf-fl-grid");
+      wrap.style.gridTemplateColumns = "minmax(0,1fr)";
+      state.scale = WFTables.scaleFor(1);
+      wrap.appendChild(column(one, state.scale));
+      add(state.host, wrap);
+      startTimers();
+      return;
+    }
+
     add(state.host, topBar());
     var states = WFTables.areaState(state.ctx.boardCfg, state.cards, state.cfg, state.area);
     if (state.ctx.isManager) add(state.host, summaryStrip(states));
@@ -375,13 +460,81 @@
     startTimers();
   }
 
+  /**
+   * The thin bar on a pinned tablet: which bench, the time, and a way out.
+   *
+   * Deliberately not the full top bar. The area tabs are meaningless on a
+   * tablet that only ever shows one bench, and the gear belongs to whoever set
+   * the shop up rather than to the person standing at it. "Show every station"
+   * is there because a tablet that cannot be un-pinned is a tablet somebody has
+   * to factory-reset to use for anything else.
+   */
+  function pinnedBar(station) {
+    var bar = O.el("div.wf-fl-top");
+    bar.appendChild(O.el("div.wf-fl-area", {
+      text: station.table || "This station"
+    }));
+    bar.appendChild(O.el("div.wf-fl-clock", null,
+      O.el("b", { id: "wfFlNow", text: nowText() }),
+      O.el("span", {
+        text: station.welder
+          ? ("Signed in as " + station.welder)
+          : "Nobody rostered to this bench"
+      })));
+    bar.appendChild(O.btn("Refresh", {
+      small: true, busyText: "…",
+      onClick: function () { return state.ctx.reload().then(refresh); }
+    }));
+    if (state.ctx.isManager) {
+      bar.appendChild(O.el("button.wf-fl-gear", {
+        type: "button", title: "Show every station", "aria-label": "Show every station",
+        text: "⤢",
+        onClick: function () {
+          // false, not null: null means "haven't looked yet" and the next
+          // refresh would re-read the pin straight back out of the URL.
+          state.pinned = false;
+          writePin(null);
+          paint();
+        }
+      }));
+    }
+    return bar;
+  }
+
   function refresh() {
     return Promise.all([
       state.ctx.cards(),
-      WFTables.load(state.ctx.t)
+      WFTables.load(state.ctx.t),
+      /* The member-private copy of the pin, as the last of the three places it
+       * can live. Read here rather than at load so a tablet whose localStorage
+       * Safari has cleared still comes back to its own bench.
+       *
+       * Wrapped in Promise.resolve().then() rather than called directly: a `t`
+       * that does not implement member scope throws SYNCHRONOUSLY, and a
+       * synchronous throw inside the array literal escapes before Promise.all
+       * is ever built — so neither this .catch nor the one on the end of the
+       * chain exists yet. The whole Floor tab died with no error panel and no
+       * Try again, because a tablet could not remember which bench it was. */
+      Promise.resolve()
+        .then(function () {
+          return state.ctx.t.get("member", "private", PIN_KEY, null);
+        })
+        .catch(function () { return null; })
     ]).then(function (r) {
       state.cards = r[0];
       state.cfg = r[1];
+      /* `false` means "un-pinned on purpose", which is NOT the same as null.
+       *
+       * writePin can clear both storages but it cannot clear a query string,
+       * and ?station=s2 is the form we recommend because a home-screen shortcut
+       * carries it. So a manager tapped ⤢, got the whole shop, tapped Refresh,
+       * and the tablet silently re-pinned itself from its own bookmark —
+       * Refresh being the single most likely next tap.
+       *
+       * Session-scoped on purpose. The bookmark stays authoritative across a
+       * reload, because a bench tablet that forgets its bench after a power cut
+       * is worse than one a manager has to un-pin twice. */
+      if (state.pinned === null) state.pinned = readPin() || r[2] || false;
       paint();
     }).catch(function (e) {
       if (!state.host) return;
@@ -426,12 +579,70 @@
     // Refresh, which is why nobody found it -- station setup is the first thing
     // a manager needs on this screen and it looked like a filter.
     if (state.ctx.isManager) {
+      // Pin this tablet to one bench. On a shop iPad bolted to Station #2 this
+      // is the setup step that makes it Station #2's screen for good.
+      bar.appendChild(O.el("button.wf-fl-gear", {
+        type: "button", title: "Pin this tablet to one station",
+        "aria-label": "Pin this tablet to one station",
+        text: "⌗", onClick: openPin
+      }));
       bar.appendChild(O.el("button.wf-fl-gear", {
         type: "button", title: "Station setup", "aria-label": "Station setup",
         text: "⚙", onClick: openStations
       }));
     }
     return bar;
+  }
+
+  /**
+   * Pin this device to a bench.
+   *
+   * The link is offered because it is the only form of the pin that survives
+   * everything: a home-screen shortcut carrying ?station=s2 does not care what
+   * Safari does to storage, what account is signed in, or whether anybody ever
+   * opens this dialog again on that tablet.
+   */
+  function openPin() {
+    var sel = O.el("select", {
+      style: "font:inherit;font-size:14px;padding:8px 10px;border-radius:10px;" +
+             "border:1px solid var(--wf-line);width:100%;box-sizing:border-box"
+    });
+    sel.appendChild(O.el("option", { value: "", text: "Show every station (not pinned)" }));
+    (state.cfg.stations || []).forEach(function (s) {
+      var o = O.el("option", {
+        value: s.id,
+        text: s.table + " · " + WFTables.areaLabel(s.area) +
+              (s.welder ? " · " + s.welder : "")
+      });
+      if (s.id === state.pinned) o.selected = true;
+      sel.appendChild(o);
+    });
+
+    var link = O.el("div.muted", { style: "font-size:12px;margin-top:10px;word-break:break-all" });
+    function showLink() {
+      link.textContent = sel.value
+        ? ("Permanent link for this bench: " +
+           location.origin + location.pathname + "?station=" + sel.value)
+        : "";
+    }
+    sel.addEventListener("change", showLink);
+    showLink();
+
+    O.dialog({
+      title: "Which bench is this tablet?",
+      note: "Pinned, this device shows that bench and nothing else — no area " +
+            "tabs, no other columns to tap by mistake. It only changes this " +
+            "device; every other screen is untouched.",
+      content: O.el("div", null, sel, link),
+      buttons: [{
+        label: "Pin it", primary: true, busyText: "Saving…",
+        onClick: function () {
+          // Same rule as the ⤢ button: an explicit "not pinned" is false.
+          state.pinned = sel.value || false;
+          return Promise.resolve(writePin(sel.value || null)).then(paint);
+        }
+      }]
+    });
   }
 
   function nowText() {
@@ -494,6 +705,21 @@
 
   /** stationId -> the checklist being worked: items, ticks, signature, signer. */
   var qcState = {};
+
+  /**
+   * The signed check for THIS bench, not merely for this list.
+   *
+   * qcRecord is keyed per card per list, and the blast booth and the powder
+   * booth share one. Asking the bare question got the powder booth the blast
+   * booth's signature: it skipped its own checklist and offered to pass the job
+   * on, showing somebody else's name as the checker. Every read of a sign-off
+   * on this screen goes through here so that cannot come back.
+   */
+  function signedHere(st) {
+    if (!st || !st.job) return null;
+    var step = WFSteps.stepForStation(st.phase, st.station.type);
+    return WFQC.floorSignOff(st.job, step ? step.id : null);
+  }
 
   /** stationId -> true while a write is in flight, so nothing double-fires. */
   var busy = {};
@@ -575,14 +801,20 @@
     // A pool card being read before it is assigned. Same panel, but the way out
     // is back to the list you opened it from, not to the station.
     if (kind === "preview" && previewing[st.station.id]) {
+      var pv = previewing[st.station.id];
+      // Came from the queue rather than the assign list: the way out is the
+      // bench, and the panel carries the button that actually takes the job.
+      var fromQueue = previewCta[st.station.id] === pv.id;
       col.classList.add("is-card");
-      col.appendChild(WFCardPanel.inline(state.ctx, previewing[st.station.id], {
-        kicker: "Trello card",
-        backLabel: "‹ Back to list",
+      col.appendChild(WFCardPanel.inline(state.ctx, pv, {
+        kicker: fromQueue ? "Before you start" : "Trello card",
+        backLabel: fromQueue ? "× Not this one" : "‹ Back to list",
         onBack: function () {
-          delete previewing[st.station.id];
-          setView(st, "assign");
-        }
+          var back = fromQueue ? (previewBack[st.station.id] || "station") : "assign";
+          clearPreview(st);
+          setView(st, back);
+        },
+        footer: fromQueue ? startAction(st, pv) : null
       }));
       return col;
     }
@@ -605,6 +837,7 @@
         kind === "qc" ? qcView(st) :
         kind === "assign" ? assignView(st) :
         kind === "queue" ? queueView(st) :
+        kind === "shop" ? shopView(st) :
         O.el("div"));
       return col;
     }
@@ -637,12 +870,14 @@
     var titles = {
       qc: "QC checklist",
       assign: "Assign to " + (st.station.table || "this station"),
-      queue: "Full queue"
+      queue: "Full queue",
+      shop: "The whole shop"
     };
     var subs = {
       qc: st.job ? jobNumber(st.job) || jobTitle(st.job) : "",
       assign: (st.phase || "") + " · nothing on a station yet",
-      queue: st.queue.length + (st.queue.length === 1 ? " waiting" : " waiting")
+      queue: st.queue.length + (st.queue.length === 1 ? " waiting" : " waiting"),
+      shop: "everything in " + (st.phase || "this phase")
     };
     var h = O.el("div.wf-fl-vh", null,
       O.el("div.wf-fl-vh-t", { text: titles[kind] || "" }),
@@ -667,7 +902,7 @@
    */
   function iconRow(st) {
     var row = O.el("div.wf-fl-icons");
-    var signed = st.job ? WFQC.floorSignOff(st.job) : null;
+    var signed = signedHere(st);
 
     var assign = O.el("button.wf-fl-ic", {
       type: "button", title: "Assign a job to this station", "aria-label": "Assign a job",
@@ -821,6 +1056,15 @@
     var person = (who && who.claimedBy) ? O.displayName(who.claimedBy) : st.station.welder;
     var meta = O.el("div.wf-fl-meta", null,
       O.el("span", { text: initials(person) + " · " + (person || "unclaimed") }));
+    // Where a job changed hands, say so on the bench. Otherwise the person who
+    // took it on wonders why the bar is at 40% before they have touched it.
+    if (who && who.takenFrom) {
+      meta.appendChild(O.el("span.wf-fl-dot"));
+      meta.appendChild(O.el("span", {
+        text: "taken from " + (who.takenFrom.fullName || who.takenFrom.username) +
+              " at " + (who.takenFrom.pct || 0) + "%"
+      }));
+    }
     if (st.phase) {
       meta.appendChild(O.el("span.wf-fl-dot"));
       meta.appendChild(O.el("span", { text: st.phase }));
@@ -920,7 +1164,7 @@
    */
   function runControls(st) {
     var running = WFTables.isRunning(st.work);
-    var signed = WFQC.floorSignOff(st.job);
+    var signed = signedHere(st);
     var row = O.el("div.wf-fl-run");
 
     /* START IS NEVER ABSENT FROM A JOB ON THE BENCH.
@@ -947,7 +1191,8 @@
         write(st, function () {
           if (running) return WFPhase.pause(state.ctx.t, st.job);
           if (claimed) return WFPhase.resume(state.ctx.t, st.job);
-          return WFPhase.claimAndStart(state.ctx.t, st.job, state.ctx.member);
+          // The bench's welder, not the tablet's account -- see claimant().
+          return WFPhase.claimAndStart(state.ctx.t, st.job, claimant(st));
         });
       }
     }));
@@ -1086,6 +1331,21 @@
         onClick: function () { setView(st, "queue"); }
       }));
     }
+    /* THE WAY OUT OF YOUR OWN BENCH.
+     *
+     * A tablet pinned to one station shows one column, so a welder who got
+     * ahead could see nothing to pull -- the Full queue is this bench's queue,
+     * and the Assign list only ever offers jobs on NO bench. Getting ahead
+     * meant standing still until somebody told you what was next, which is the
+     * micromanaging this is all meant to remove.
+     *
+     * Always offered, even on an empty bench, because an empty bench is exactly
+     * when somebody needs it. */
+    head.appendChild(O.el("button.wf-fl-link", {
+      type: "button", text: "Whole shop ›",
+      title: "Everything waiting in " + (st.phase || "this phase"),
+      onClick: function () { setView(st, "shop"); }
+    }));
     box.appendChild(head);
 
     if (!st.queue.length) {
@@ -1095,9 +1355,9 @@
       return box;
     }
 
-    box.appendChild(O.el("div.wf-fl-hint", {
-      text: st.job ? "Tap a job to switch" : "Tap a job to start"
-    }));
+    // "Look at", not "start": tapping opens the job, and the clock only starts
+    // from the button inside it. Casual reading must never record time.
+    box.appendChild(O.el("div.wf-fl-hint", { text: "Tap a job to look at it" }));
 
     var list = O.el("div.wf-fl-q");
     st.queue.slice(0, show).forEach(function (c, i) {
@@ -1132,9 +1392,10 @@
 
     return O.el("button.wf-fl-t" + (late ? ".is-late" : "") + (st.job ? "" : ".is-open"), {
       type: "button",
-      title: st.job ? "Switch to this job" : "Start this job",
+      // Opens it. Does not start it -- see previewJob.
+      title: "Look at this job",
       style: "width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer",
-      onClick: function () { requestStart(st, c); }
+      onClick: function () { previewJob(st, c); }
     },
       top,
       O.el("div.wf-fl-t-m", null,
@@ -1181,8 +1442,8 @@
       row.appendChild(O.el("button.wf-fl-t" + (late ? ".is-late" : ""), {
         type: "button",
         style: "flex:1 1 auto;text-align:left;font:inherit;color:inherit;cursor:pointer",
-        title: st.job ? "Switch to this job" : "Start this job",
-        onClick: function () { requestStart(st, c); }
+        title: "Look at this job",
+        onClick: function () { previewJob(st, c, "queue"); }
       },
         O.el("div.wf-fl-t-p", { text: String(i + 1).padStart(2, "0") }),
         O.el("div.wf-fl-t-m", null,
@@ -1267,6 +1528,172 @@
     write(st, function () {
       return WFTables.reorder(state.ctx.t, state.cards, st.station.id, next);
     }, { keepView: "queue" });
+  }
+
+  /* --------------------------------------------------------------- the shop */
+
+  /**
+   * Everything in this phase, wherever it is, with a way to take it.
+   *
+   * WHAT THIS IS FOR. A welder who finishes early should be able to look at the
+   * shop and pull the next thing, rather than wait to be told. Before this the
+   * only work visible from a bench was that bench's own queue plus jobs on no
+   * bench at all, so getting ahead meant standing still.
+   *
+   * GROUPED BY BENCH, AND SAYING SO. "Waiting here" first because it is the
+   * answer most of the time; then every other bench by name, because taking
+   * from Station #3 should feel like taking from Station #3 rather than from an
+   * anonymous pile. A job somebody is part-way through is marked, because that
+   * is a different act and the person doing it should know before they tap.
+   *
+   * Only this phase. A bench pulling a different list would never show the
+   * card, so offering it would be a move that looks like it worked and then
+   * loses the job.
+   */
+  function shopView(st) {
+    var box = O.el("div.wf-fl-vbody");
+    if (!st.phase) {
+      box.appendChild(O.el("div.wf-fl-more", {
+        text: "This station has no phase set, so there is no shop queue to show."
+      }));
+      return box;
+    }
+
+    var all = (state.cards || []).filter(function (c) {
+      if (WFTables.phaseOf(state.ctx.boardCfg, c) !== st.phase) return false;
+      var w = WFTables.activeWork(c);
+      if (w && WFTables.isFinished(w)) return false;
+      if (st.job && c.id === st.job.id) return false;   // already on this bench
+      return stepHere(st, c);
+    });
+
+    if (!all.length) {
+      box.appendChild(O.el("div.wf-fl-more", {
+        text: "Nothing else waiting anywhere in " + st.phase + "."
+      }));
+      return box;
+    }
+
+    // Bench name -> jobs. Anything on no bench is its own group at the end,
+    // because "nobody has this" is a different thing from "Station #3 has it".
+    var byStation = {};
+    var loose = [];
+    all.forEach(function (c) {
+      var w = WFTables.activeWork(c);
+      var id = w && w.tableId;
+      if (!id) return loose.push(c);
+      (byStation[id] = byStation[id] || []).push(c);
+    });
+
+    var named = (state.cfg.stations || []).filter(function (s) {
+      return byStation[s.id] && byStation[s.id].length;
+    });
+    // This bench first: most of the time the answer is already here.
+    named.sort(function (a, b) {
+      return (a.id === st.station.id ? -1 : 0) - (b.id === st.station.id ? -1 : 0);
+    });
+
+    named.forEach(function (s) {
+      box.appendChild(O.el("div.wf-fl-k", {
+        style: "margin-top:12px",
+        text: s.id === st.station.id ? "Waiting here" : s.table +
+          (s.welder ? " · " + s.welder : "")
+      }));
+      byStation[s.id].forEach(function (c) { box.appendChild(shopRow(st, c)); });
+    });
+
+    if (loose.length) {
+      box.appendChild(O.el("div.wf-fl-k", {
+        style: "margin-top:12px", text: "On no bench yet"
+      }));
+      loose.forEach(function (c) { box.appendChild(shopRow(st, c)); });
+    }
+    return box;
+  }
+
+  /** A card belongs on this screen only if it is at this bench's step. */
+  function stepHere(st, card) {
+    var steps = WFSteps.stepsFor(st.phase);
+    if (!steps.length) return true;
+    var serves = WFSteps.stepForStation(st.phase, st.station.type);
+    if (!serves) return true;
+    var at = WFSteps.stepFor(st.phase, card.labelNames || []);
+    return !!(at && at.step.id === serves.id);
+  }
+
+  function shopRow(st, c) {
+    var w = WFTables.activeWork(c);
+    var held = w && w.claimedBy;
+    var pct = (w && typeof w.percentComplete === "number") ? w.percentComplete : 0;
+    var started = !!(w && w.segments && w.segments.length);
+    var late = WFTables.isLate(c);
+
+    var row = O.el("div.wf-fl-atile");
+    row.appendChild(O.el("div.wf-fl-t-n", { text: c.name }));
+    row.appendChild(O.el("div.wf-fl-t-d" + (late ? ".is-late" : ""), {
+      text: [dueText(c) || "no date set",
+             held ? O.displayName(held) : "unclaimed",
+             started ? pct + "% done" : null].filter(Boolean).join(" · ")
+    }));
+
+    var acts = O.el("div.wf-fl-arow");
+    acts.appendChild(O.el("button.wf-fl-link", {
+      type: "button", text: "↗ Look at it",
+      onClick: function () { previewJob(st, c, "shop"); }
+    }));
+
+    /* `job.assign` decides who may move work, and it is already scoped, so the
+     * policy lives in the Access tab rather than in this file. A welder with
+     * nothing but `own` sees the shop and can still take unclaimed work -- the
+     * looking is never gated, because a shop floor that cannot see its own
+     * queue is the problem this screen exists for. */
+    var mine = held && held.username === claimant(st).username;
+    var mayMove = !started || !held || mine ||
+      (typeof state.ctx.can !== "function") || state.ctx.can("job.assign");
+
+    acts.appendChild(O.el("button.wf-fl-btn.wf-fl-small", {
+      type: "button",
+      text: started && held && !mine ? "Take it on" : "Bring it here",
+      disabled: !mayMove,
+      style: mayMove ? "" : "opacity:.4;cursor:default",
+      title: mayMove ? "" : "Somebody is part-way through this one",
+      onClick: mayMove ? function () {
+        if (started && held && !mine) return confirmTakeOver(st, c, held);
+        /* CLAIMED BUT NEVER STARTED IS STILL SOMEBODY'S JOB.
+         *
+         * Nothing has been worked, so nothing is lost by moving it -- but it
+         * was given to a person, and pulling it onto another bench without a
+         * word means they go looking for their next job and find it gone. The
+         * ask is cheap and it is the difference between the shop organising
+         * itself and work quietly disappearing. */
+        if (held && !mine) {
+          return O.dialog({
+            title: "Take " + (jobNumber(c) || "this job") + " from " +
+                   O.firstName(held) + "?",
+            note: O.displayName(held) + " has this one but has not started it, " +
+                  "so no time moves with it. They will find it gone from their " +
+                  "bench — worth a word if they are expecting it.",
+            buttons: [{
+              label: "Bring it here", primary: true, busyText: "Moving it…",
+              onClick: function () {
+                return doWrite(st, function () {
+                  return WFTables.setStation(
+                    state.ctx.t, c, st.station.id, st.queue.length);
+                }, { keepView: "shop" })
+                  .catch(function (e) { if (!e || !e.dropped) throw e; });
+              }
+            }, {
+              label: "Leave it with " + O.firstName(held), quiet: true
+            }]
+          });
+        }
+        write(st, function () {
+          return WFTables.setStation(state.ctx.t, c, st.station.id, st.queue.length);
+        }, { keepView: "shop" });
+      } : null
+    }));
+    row.appendChild(acts);
+    return row;
   }
 
   /* ------------------------------------------------------------ assign view */
@@ -1368,6 +1795,15 @@
    */
   function previewFromAssign(st, card) {
     previewing[st.station.id] = card;
+    /* A PREVIEW FROM THE LIST IS NOT A PREVIEW FROM THE QUEUE.
+     *
+     * The panel tells the two apart by whether previewCta names the card being
+     * shown, and nothing here cleared it. Preview the same job from the queue
+     * and then again from the assign list and the assign preview inherited the
+     * queue's Start footer and its "× Not this one" way out -- a start button
+     * on a screen whose whole point is that assigning does not start a clock. */
+    delete previewCta[st.station.id];
+    delete previewBack[st.station.id];
     setView(st, "preview");
   }
 
@@ -1419,6 +1855,154 @@
    * somebody's work to start something else is the kind of surprise that makes
    * a shop stop trusting a screen.
    */
+  /**
+   * Tapping a job in the queue OPENS it. It does not start it.
+   *
+   * THE TRAP THIS REMOVES. Tapping a tile used to start the job on the spot, so
+   * a welder reading the queue to decide what to pick up was logging time
+   * against whatever they happened to tap. Casual looking became recorded work,
+   * and the person it was recorded against had no idea.
+   *
+   * Looking is now free and taking is deliberate: the preview shows the
+   * drawing, the date, what it is and who had it, with one button that commits.
+   * And because taking it starts the clock in the same action, there is no
+   * second tap anybody can forget -- which was the other half of the problem,
+   * and the half that makes build times read as faster than they are.
+   */
+  function previewJob(st, card, back) {
+    previewing[st.station.id] = card;
+    views[st.station.id] = "preview";
+    previewCta[st.station.id] = card.id;
+    // Where the × goes. The shop list is somewhere you were READING, and
+    // dropping somebody back on their own bench loses the place they had in a
+    // list of thirty jobs. The queue tiles are on the station, so they say so.
+    previewBack[st.station.id] = back || "station";
+    repaintColumn(st);
+  }
+
+  /** stationId -> card id the preview should offer to start. */
+  var previewCta = {};
+
+  /** stationId -> the view a start-preview's × returns to. */
+  var previewBack = {};
+
+  /**
+   * Forget the preview AND the view that is showing it.
+   *
+   * `previewing`, `previewCta` and `views` have to move together. Deleting the
+   * first two without putting `views` back left a station whose view said
+   * "preview" with nothing previewed, which falls through column()'s
+   * subject-has-gone fallback and draws the ASSIGN list -- so a welder who
+   * pressed Start and then answered "keep working on it" landed in a list of
+   * unassigned jobs instead of back at their own bench.
+   */
+  function clearPreview(st) {
+    var id = st.station.id;
+    delete previewing[id];
+    delete previewCta[id];
+    delete previewBack[id];
+    views[id] = "station";
+  }
+
+  /**
+   * The button that commits, shown at the foot of a job preview.
+   *
+   * It is the ONLY thing on this screen that starts a clock, which is the whole
+   * design: everything else here is reading. The label says what will happen in
+   * the words a welder would use, including the two cases that are not simply
+   * "start" -- taking the job off somebody else, and putting down what is
+   * already on the bench to pick this up instead.
+   */
+  function startAction(st, card) {
+    return function () {
+      var w = WFTables.activeWork(card);
+      var held = w && w.claimedBy;
+      /* THE BENCH'S WELDER, NOT THE TABLET'S ACCOUNT -- see claimant().
+       *
+       * This read ctx.member, which on a tablet signed in once by whoever set
+       * the iPads up is never the person at the bench. The job Kevin already
+       * holds at Kevin's bench offered "Take it from Kevin" to Kevin, and a job
+       * held by the setup account offered a plain "Start this job" that quietly
+       * resumed somebody else's clock. Everything else on this screen claims
+       * through claimant(); so does this. */
+      var mine = held && held.username === claimant(st).username;
+      var taking = held && !mine;
+
+      var label = taking
+        ? "Take it from " + O.firstName(held)
+        : st.job ? "Put down " + (jobNumber(st.job) || "that one") + " and start this"
+        : "Start this job";
+
+      var row = O.el("div", { style: "display:flex;gap:8px;align-items:center;flex:1" });
+      row.appendChild(O.btn(label, {
+        primary: true,
+        onClick: function () {
+          // Put the column back to the bench BEFORE either dialog opens, so
+          // cancelling leaves them where they started rather than in a view
+          // whose subject has just been deleted.
+          clearPreview(st);
+          repaintColumn(st);
+          if (taking) return confirmTakeOver(st, card, held);
+          requestStart(st, card);
+        }
+      }));
+      row.appendChild(O.el("div.muted", {
+        style: "font-size:12px",
+        text: taking
+          ? "The clock moves to you, and the card records the hand-over."
+          : "The clock starts when you do."
+      }));
+      return row;
+    };
+  }
+
+  /**
+   * Taking a job off another bench, with the hand-over written down.
+   *
+   * Anybody may do it -- a welder who gets ahead pulling the next thing is the
+   * shop organising itself and should not wait on a manager. What it is not is
+   * quiet: the dialog names whose job it is and how far along, and the card
+   * gets a comment saying who took what from whom at what percentage.
+   *
+   * That record is the whole reason this is safe to allow. Without it the
+   * numbers lie in both directions at once -- the person handing over looks
+   * slow for work they passed on, and the person taking it looks fast for work
+   * they inherited.
+   */
+  function confirmTakeOver(st, card, held) {
+    var w = WFTables.activeWork(card) || {};
+    var pct = typeof w.percentComplete === "number" ? w.percentComplete : 0;
+    var mins = WFTables.elapsedMinutes(w);
+    var why = O.el("input.wf-fl-input", {
+      type: "text", placeholder: "Why are you taking it? (optional)"
+    });
+
+    O.dialog({
+      title: "Take " + (jobNumber(card) || "this job") + " from " +
+             O.firstName(held) + "?",
+      note: O.displayName(held) + " has it at " + pct + "%" +
+            (mins ? " with " + WFTables.clockText(mins) + " on the clock" : "") +
+            ". Their time stays theirs and yours starts fresh — the card will " +
+            "say you took it over, so neither of your numbers reads wrong.",
+      content: O.el("div", null, why),
+      buttons: [{
+        label: "Take it on", primary: true, busyText: "Taking it…",
+        onClick: function () {
+          return doWrite(st, function () {
+            return WFPhase.takeOver(state.ctx.t, card, claimant(st),
+              { reason: String(why.value || "").trim() })
+              .then(function () {
+                return WFTables.setStation(state.ctx.t, card, st.station.id, 0);
+              })
+              .then(function () { return WFPhase.resume(state.ctx.t, card); });
+          }).catch(function (e) { if (!e || !e.dropped) throw e; });
+        }
+      }, {
+        label: "Leave it with " + O.firstName(held), quiet: true
+      }]
+    });
+  }
+
   function requestStart(st, card) {
     if (!st.job) return startHere(st, card);
 
@@ -1450,12 +2034,39 @@
     write(st, function () { return start(st, card); });
   }
 
+  /**
+   * Who a job gets claimed for.
+   *
+   * THE BENCH'S WELDER, NOT THE ACCOUNT THE SCREEN IS SIGNED INTO.
+   *
+   * Every bench gets its own tablet, and a tablet is signed in once and then
+   * left alone. Claiming for `ctx.member` meant every job in the shop was
+   * recorded against whoever set the tablets up — four stations, one name on
+   * everything. Per-person build times are the whole reason the timer exists,
+   * and they would all have been one person's.
+   *
+   * So the station says who. It already carries a rostered welder, a manager
+   * already changes it when the day's assignments change, and it is the only
+   * answer that is right without anybody tapping anything extra at the bench.
+   *
+   * Where no one is rostered, it falls back to whoever is signed in rather than
+   * refusing — an unstaffed bench should still be able to start work, and a
+   * name that is merely imprecise beats a job nobody can begin.
+   */
+  function claimant(st) {
+    var who = st.station && st.station.welder;
+    if (!who) return state.ctx.member;
+    var m = ((state.ctx.board && state.ctx.board.members) || [])
+      .filter(function (x) { return x.username === who; })[0];
+    return m || state.ctx.member;
+  }
+
   /** Claim it if nobody has, resume it if somebody did, and put it on the bench. */
   function start(st, card) {
     var w = WFTables.activeWork(card);
     var begin = (w && w.claimedBy)
       ? WFPhase.resume(state.ctx.t, card)
-      : WFPhase.claimAndStart(state.ctx.t, card, state.ctx.member);
+      : WFPhase.claimAndStart(state.ctx.t, card, claimant(st));
     return begin.then(function () {
       return WFTables.setStation(state.ctx.t, card, st.station.id, 0);
     });
@@ -1473,7 +2084,7 @@
    * front of the person who can fix it.
    */
   function askComplete(st) {
-    if (!WFQC.floorSignOff(st.job)) {
+    if (!signedHere(st)) {
       // Stamped with the job, so qcView can tell an in-progress list for THIS
       // job from one left behind by the last job on this bench.
       var q = qcState[st.station.id];
@@ -1486,22 +2097,49 @@
 
   function confirmComplete(st) {
     var next = WFStage.getNextStage(state.ctx.board.id, st.job.idList);
-    var rec = WFQC.floorSignOff(st.job);
+    var rec = signedHere(st);
+
+    /* SAY WHAT WILL ACTUALLY HAPPEN, WHICH IS NOT ALWAYS A MOVE.
+     *
+     * The blast booth and the powder booth share one Trello column, so signing
+     * off at the blast booth hands the job over without the card going
+     * anywhere. Promising "the card moves to Install" and then leaving it where
+     * it is would be the kind of quiet lie that makes people stop reading
+     * dialogs -- and here it would also look exactly like the hand-off having
+     * failed. */
+    var steps = WFSteps.stepsFor(st.phase);
+    var mine = WFSteps.stepForStation(st.phase, st.station.type);
+    var idx = mine ? steps.map(function (s) { return s.id; }).indexOf(mine.id) : -1;
+    var handsTo = (idx > -1 && idx < steps.length - 1) ? steps[idx + 1] : null;
+
     O.dialog({
-      title: "Mark " + (jobNumber(st.job) || "this job") + " complete?",
+      title: handsTo
+        ? (mine.name + " done on " + (jobNumber(st.job) || "this job") + "?")
+        : "Mark " + (jobNumber(st.job) || "this job") + " complete?",
       note: "QC signed by " +
         ((rec && rec.signedBy && rec.signedBy.fullName) || (rec && rec.signature) || "somebody") +
-        ". " + (next
+        ". " + (handsTo
+          ? "It goes to " + handsTo.name + " next. The card stays in " +
+            (st.phase || "this list") + " — " + handsTo.name +
+            " is the same column — and picks up a “" + mine.label +
+            "” label so the board shows where it got to."
+          : next
           ? "The card moves to " + next.name + " and shows up in that phase's queue."
           : "No next phase is configured, so the card stays where it is."),
       buttons: [{
-        label: next ? "Complete and pass to " + next.name : "Mark complete",
-        primary: true, busyText: "Passing it on…",
+        label: handsTo ? "Hand it to " + handsTo.name
+          : next ? "Complete and pass to " + next.name
+          : "Mark complete",
+        primary: true, busyText: handsTo ? "Handing it over…" : "Passing it on…",
         onClick: function () {
           // The delete only runs on a real pass. A dropped or failed write must
           // leave the signed state exactly where it was.
           return doWrite(st, function () {
-            return WFQC.passSigned(state.ctx.t, st.job, st.job);
+            return WFQC.passSigned(state.ctx.t, st.job, st.job, {
+              phase: st.phase,
+              stationType: st.station.type,
+              boardLabels: state.ctx.boardLabels
+            });
           })
             .then(function () { delete qcState[st.station.id]; })
             .catch(function (e) { if (!e || !e.dropped) throw e; });
@@ -1513,8 +2151,8 @@
   /**
    * The checklist view.
    *
-   * Items come from the station's own list, not the phase's -- the blast booth,
-   * the powder booth and the cure oven all sit on one phase and check
+   * Items come from the station's own list, not the phase's -- the blast booth
+   * and the powder booth sit on one phase and check
    * completely different things. Each line carries its tolerance underneath,
    * because "frame is square" is a line anybody can tick in good conscience and
    * "diagonals within 1/8 inch" is one they can fail.
@@ -1541,7 +2179,7 @@
       return box;
     }
 
-    var done = WFQC.floorSignOff(st.job);
+    var done = signedHere(st);
     if (done) {
       box.appendChild(signedStamp(st, done));
       return box;
@@ -1635,7 +2273,7 @@
     /* AN EMPTY CHECKLIST MUST NOT BE A LOCKED DOOR.
      *
      * Only Assemble ships with a default list, so the blast booth, the powder
-     * booth, the cure oven and Install all land here with nothing to tick. This
+     * booth and Install all land here with nothing to tick. This
      * used to return before the rest of the view was built -- including, as it
      * happens, the manager-only "Edit this list" button, which lives inside
      * checkAllRow. Complete sends you to the checklist, the checklist has no
@@ -1849,7 +2487,12 @@
         stationId: st.station.id,
         listName: q.listName,
         items: items,
-        worker: state.ctx.member
+        // The bench's welder, same rule as claiming. `worker` lands in the
+        // record as who found the fault, and on a tablet bolted to Station #2
+        // that is whoever is standing at Station #2 -- not whoever the device
+        // happens to be signed in as. The SIGNER is separate and still chosen
+        // by hand, which is the part that has to be a deliberate act.
+        worker: claimant(st)
       });
     }, { keepView: "qc" })
       .then(function () { delete qcState[st.station.id]; })
@@ -2116,6 +2759,10 @@
     doWrite(st, function () {
       return WFQC.signOff(state.ctx.t, st.job, {
         stationId: st.station.id,
+        // Which bench this signature is for. Without it the powder booth
+        // inherits the blast booth's sign-off -- same card, same list, same
+        // record -- and ships powder coat nobody checked.
+        stepId: (WFSteps.stepForStation(st.phase, st.station.type) || {}).id || null,
         phase: st.phase,
         listName: q.listName,
         items: q.items,
@@ -2136,7 +2783,10 @@
         checkedAll: !!q.checkedAll,
         signature: q.signature,
         signedBy: signer,
-        worker: state.ctx.member
+        // Who did the work, which is the bench's welder. Distinct from
+        // signedBy, which is who vouched for it and is chosen deliberately --
+        // the two being different people is the whole point of a peer check.
+        worker: claimant(st)
       });
     })
       .then(function () { delete qcState[st.station.id]; })

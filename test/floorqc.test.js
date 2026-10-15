@@ -9,8 +9,8 @@
  * not a UI regression.
  *
  * The second thing held here: the checklist is keyed by STATION, not phase. The
- * blast booth, the powder booth and the cure oven all sit on one phase and
- * check entirely different things; keying by phase would quietly give all three
+ * blast booth and the powder booth sit on one phase and
+ * check entirely different things; keying by phase would quietly give both of them
  * the same list.
  */
 "use strict";

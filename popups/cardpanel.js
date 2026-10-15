@@ -511,14 +511,7 @@
       var b = body(ctx, card, opts);
       panel.replaceChild(b, slot);
 
-      var foot = O.el("div.wf-cp-foot", null,
-        O.el("a.wf-cp-note", {
-          href: card.shortUrl, target: "_blank", rel: "noopener",
-          style: "text-decoration:underline",
-          text: "Open in Trello"
-        }));
-      if (opts.footer) foot.insertBefore(opts.footer(card), foot.firstChild);
-      panel.appendChild(foot);
+      panel.appendChild(foot(card));
     }).catch(function (e) {
       slot.textContent = "";
       slot.appendChild(O.el("div.wf-cp-note.is-bad", {
@@ -528,7 +521,28 @@
         href: cardRef.shortUrl || "#", target: "_blank", rel: "noopener",
         style: "text-decoration:underline", text: "Open it in Trello instead"
       }));
+      /* THE FOOTER SURVIVES A CARD THAT WOULD NOT LOAD.
+       *
+       * It carries the caller's action, and on the Floor that action is the
+       * ONLY way to start a queued job -- tapping the tile just opens this
+       * panel. Leaving it out of this branch meant one slow REST call took the
+       * Start button off the screen entirely, and the welder's answer is to
+       * tap the tile again, which does the same thing. The card is what failed
+       * to render; the decision about the job is still available. */
+      panel.appendChild(foot(cardRef));
     });
+
+    /** The footer: the caller's action, if any, and the way out to Trello. */
+    function foot(card) {
+      var f = O.el("div.wf-cp-foot", null,
+        O.el("a.wf-cp-note", {
+          href: card.shortUrl || "#", target: "_blank", rel: "noopener",
+          style: "text-decoration:underline",
+          text: "Open in Trello"
+        }));
+      if (opts.footer) f.insertBefore(opts.footer(card), f.firstChild);
+      return f;
+    }
 
     return panel;
   }
