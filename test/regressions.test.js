@@ -2689,3 +2689,341 @@ test("leavesNoTrace: a malformed segment fails towards KEEPING the record", () =
     { start: "2020-01-01T00:00:00.000Z", end: "garbage" }] }), false,
     "and an unparseable end");
 });
+
+/* ============== a tablet with a bad clock must not delete somebody's day
+ *
+ * THE DEFECT, AND IT WAS A DATA-LOSS ONE. Shop tablets do not keep good time.
+ * One running two hours fast writes a `start` two hours in the future; read
+ * back on a machine whose clock is right, that segment measures NEGATIVE.
+ * Unclamped, the negative cancelled the real hours either side of it, so a job
+ * with ninety minutes on it totalled under a minute, `leavesNoTrace` said yes,
+ * and giving the job back DELETED THE RECORD -- silently, and with the confirm
+ * dialog agreeing the whole way, because the dialog asks the same question.
+ *
+ * `elapsedMs` now floors each segment at zero. A stretch that claims to run
+ * backwards is not evidence that nobody worked; it is evidence of a bad clock.
+ * Count it as nothing and KEEP the record.
+ *
+ * These are written against the arithmetic AND against `release`, because the
+ * unit answer being right is not the thing that was lost -- the record was.
+ */
+
+const MIN = 60000;
+
+/** The sum exactly as it was written before the clamp, kept for A/B proof. */
+function unclampedMs(work) {
+  if (!work || !work.segments) return 0;
+  let ms = 0;
+  work.segments.forEach((seg) => {
+    const end = seg.end ? new Date(seg.end) : new Date();
+    ms += end - new Date(seg.start);
+  });
+  return ms;
+}
+
+/**
+ * Ninety real minutes in two closed segments, plus one open segment the fast
+ * tablet stamped two hours into the future.
+ *
+ * Unclamped this sums to MINUS thirty minutes. That is the shape that deleted
+ * a record, so it is the shape the tests use.
+ */
+function skewedWork(extra) {
+  const base = Date.now() - 5 * 3600000;
+  return Object.assign({
+    percentComplete: 0,
+    segments: [
+      { start: new Date(base).toISOString(),
+        end: new Date(base + 60 * MIN).toISOString() },           // 60 min
+      { start: new Date(base + 90 * MIN).toISOString(),
+        end: new Date(base + 120 * MIN).toISOString() },          // 30 min
+      { start: new Date(Date.now() + 2 * 3600000).toISOString(),  // the bad clock
+        end: null }
+    ]
+  }, extra || {});
+}
+
+test("SKEW: a future `start` can no longer cancel out ninety real minutes", () => {
+  const P = win.WFPhase;
+  const work = skewedWork();
+
+  // The fixture is the bug. Prove it before asserting it is fixed, or this
+  // test would still pass against a clock that was never skewed.
+  assert.ok(unclampedMs(work) < MIN,
+    "fixture: unclamped, this job measures under a minute (" +
+    unclampedMs(work) + "ms) -- that is what deleted records");
+  assert.ok(unclampedMs(work) < 0, "fixture: and it is in fact negative");
+
+  assert.ok(P.elapsedMs(work) >= 90 * MIN,
+    "the ninety real minutes survive the bad segment (" + P.elapsedMs(work) + "ms)");
+  assert.equal(P.elapsedMs(work), 90 * MIN,
+    "the backwards segment counts as nothing, not as negative time");
+  assert.equal(P.totalMinutes(work), 90);
+  assert.equal(P.reportedMinutes(work), 90);
+  assert.equal(P.leavesNoTrace(work), false,
+    "THE DEFECT: this said true, and `release` then binned the lot");
+});
+
+test("SKEW: giving back a job a fast tablet touched KEEPS the record", async () => {
+  const { w, t, store, meta, worker, comments } = releaseEnv(null);
+  store["c1/phaseWork"] = Object.assign(store["c1/phaseWork"], skewedWork());
+
+  assert.equal(w.WFPhase.leavesNoTrace(store["c1/phaseWork"]), false,
+    "fixture: the predicate the write path asks");
+
+  const out = await w.WFPhase.release(t, meta, GIVER);
+
+  assert.equal(out.cleared, false, "THE DEFECT: this cleared, and the day went with it");
+  assert.ok(store["c1/phaseWork"], "the record is still on the card");
+  assert.ok(w.WFPhase.totalMinutes(store["c1/phaseWork"]) >= 90,
+    "with the ninety minutes still on it (" +
+    w.WFPhase.totalMinutes(store["c1/phaseWork"]) + ")");
+  assert.equal(out.minutes, 90, "and the card is told about real minutes only");
+  assert.equal(comments.length, 1, "real work changing hands is said out loud");
+  assert.match(comments[0], /90 min already logged stays on the job/);
+  assert.equal(store["c1/phaseWork"].segments[0].by, worker.username,
+    "and the hours are stamped before the claim goes");
+});
+
+test("SKEW, the mirrors: every way a segment can run backwards", () => {
+  const P = win.WFPhase;
+  const now = Date.now();
+  const iso = (ms) => new Date(ms).toISOString();
+
+  // (a) end BEFORE start -- the plainest backwards segment there is.
+  const backwards = { percentComplete: 0,
+    segments: [{ start: iso(now - 1 * 3600000), end: iso(now - 2 * 3600000) }] };
+  assert.equal(unclampedMs(backwards), -3600000, "fixture: minus an hour");
+  assert.equal(P.elapsedMs(backwards), 0, "clamped to nothing, never to negative");
+  assert.equal(P.totalMinutes(backwards), 0);
+  assert.equal(P.leavesNoTrace(backwards), true,
+    "and with nothing else on the job there is genuinely nothing to keep");
+
+  // (b) end before start, alongside real work -- the dangerous one, because
+  //     here the clamp is the difference between keeping and deleting.
+  const mixed = { percentComplete: 0, segments: [
+    { start: iso(now - 3 * 3600000), end: iso(now - 2 * 3600000) },   // a real hour
+    { start: iso(now - 1 * 3600000), end: iso(now - 2 * 3600000) }    // minus an hour
+  ] };
+  assert.equal(unclampedMs(mixed), 0, "fixture: unclamped the two cancel exactly");
+  assert.equal(P.elapsedMs(mixed), 3600000, "the real hour is not cancelled by a bad one");
+  assert.equal(P.leavesNoTrace(mixed), false, "so the record stays");
+
+  // (c) a single CLOSED segment wholly in the future. It runs forwards, so it
+  //     is an hour of work by a tablet that is simply wrong about when --
+  //     the clamp is a no-op and the hour counts. Deleting it would be the
+  //     worse error of the two.
+  const future = { percentComplete: 0,
+    segments: [{ start: iso(now + 2 * 3600000), end: iso(now + 3 * 3600000) }] };
+  assert.equal(P.elapsedMs(future), 3600000, "an hour is an hour, whenever it is stamped");
+  assert.equal(unclampedMs(future), P.elapsedMs(future), "and the clamp changed nothing");
+  assert.equal(P.leavesNoTrace(future), false, "so it is kept");
+
+  // (d) a single OPEN segment wholly in the future, with nothing else. Clamped
+  //     this is zero, so the job does read as untouched -- which it is. Pinned
+  //     so the honest-looking answer here is not mistaken for the (b) case.
+  const futureOpen = { percentComplete: 0,
+    segments: [{ start: iso(now + 2 * 3600000), end: null }] };
+  assert.ok(unclampedMs(futureOpen) < -7000000, "fixture: roughly minus two hours");
+  assert.equal(P.elapsedMs(futureOpen), 0);
+  assert.equal(P.leavesNoTrace(futureOpen), true,
+    "nothing else on the job and no measurable time: there is nothing to erase");
+
+  // (e) and the same thing WITH a percent is still kept, because the slider is
+  //     work the clock cannot see.
+  assert.equal(P.leavesNoTrace({ percentComplete: 25,
+    segments: [{ start: iso(now + 2 * 3600000), end: null }] }), false);
+});
+
+/* ============ the clamp must not move a single honest number
+ *
+ * `totalMinutes` feeds costing, the phaseLog and the Records tab. A clamp that
+ * quietly re-rounded ordinary data would be a worse bug than the one it fixes
+ * and would not announce itself anywhere. So: on well-formed segments the new
+ * arithmetic must be IDENTICAL to the old, not merely close.
+ */
+test("CLAMP IS A NO-OP on every well-formed shape", () => {
+  const P = win.WFPhase;
+  const t0 = Date.parse("2020-06-01T07:00:00.000Z");
+  const iso = (ms) => new Date(ms).toISOString();
+  const span = (ms) => ({ start: iso(t0), end: iso(t0 + ms) });
+
+  // Every boundary the rounding can turn on, plus a few ordinary shifts.
+  const durations = [0, 1, 499, 500, 501, 999, 1000, 29999, 30000, 30001,
+                     31000, 59999, 60000, 60001, 89999, 90000, 90001,
+                     150000, 5400000, 8 * 3600000, 24 * 3600000];
+
+  durations.forEach((ms) => {
+    const work = { percentComplete: 0, segments: [span(ms)] };
+    assert.equal(P.elapsedMs(work), unclampedMs(work),
+      "elapsedMs moved at " + ms + "ms");
+    assert.equal(P.totalMinutes(work), Math.round(unclampedMs(work) / 60000),
+      "totalMinutes moved at " + ms + "ms");
+  });
+
+  // Multi-segment, including the back-to-back and gapped shapes pause/resume
+  // actually produce, and a job that changed hands.
+  const shapes = [
+    [[0, 45 * MIN], [45 * MIN, 50 * MIN]],                    // back to back
+    [[0, 25 * MIN], [90 * MIN, 140 * MIN]],                   // with a gap
+    [[0, 1], [10, 11], [20, 21]],                             // three millisecond taps
+    [[0, 29999], [60 * MIN, 60 * MIN + 30001]],               // rounds either way
+    [[0, 7 * 3600000], [8 * 3600000, 15 * 3600000]]           // two long shifts
+  ];
+  shapes.forEach((segs, i) => {
+    const work = { percentComplete: 0, segments: segs.map(
+      ([a, b]) => ({ start: iso(t0 + a), end: iso(t0 + b), by: "mike" })) };
+    assert.equal(P.elapsedMs(work), unclampedMs(work), "elapsedMs moved on shape " + i);
+    assert.equal(P.totalMinutes(work), Math.round(unclampedMs(work) / 60000),
+      "totalMinutes moved on shape " + i);
+    assert.equal(P.totalMinutes(work), T.elapsedMinutes(work),
+      "and WFTables.elapsedMinutes, which is NOT clamped, still agrees on shape " + i);
+  });
+
+  // The empty and absent cases, which costing hits constantly.
+  [null, undefined, {}, { segments: [] }, { segments: null }].forEach((work, i) => {
+    assert.equal(P.elapsedMs(work), 0, "empty shape " + i);
+    assert.equal(P.totalMinutes(work), 0, "empty shape " + i);
+  });
+
+  /* A RUNNING segment cannot be compared byte-for-byte: both functions call
+   * `new Date()` themselves, a moment apart. One millisecond of tolerance is
+   * the measurement, not the clamp. */
+  const running = { percentComplete: 0,
+    segments: [{ start: new Date(Date.now() - 95 * MIN).toISOString(), end: null }] };
+  assert.ok(Math.abs(P.elapsedMs(running) - unclampedMs(running)) <= 2,
+    "a running segment is untouched by the clamp");
+  assert.equal(P.totalMinutes(running), 95);
+});
+
+test("the clamp did not move what gets WRITTEN DOWN either", async () => {
+  /* totalMinutes is not just displayed -- it is frozen into phaseLog, which is
+   * what costing.js and the Records tab read forever after. */
+  const { w, t, meta, store } = releaseEnv(137);
+  const entry = await w.WFPhase.logPhase(t, meta, { by: GIVER, listName: "Weld" });
+  assert.equal(entry.durationMinutes, 137,
+    "the logged duration is the honest one, to the minute");
+  assert.equal(entry.durationMinutes,
+    Math.round(unclampedMs(store["c1/phaseWork"]) / 60000),
+    "byte-identical to the pre-clamp arithmetic");
+});
+
+/* ================================ reportedMinutes is for SAYING, not costing
+ *
+ * `totalMinutes` rounds, which is right for costing a phase and wrong for
+ * printing: a job kept because the slider is at 25%, with 31 seconds on the
+ * clock, announced "1 min already logged stays on the job" about a minute
+ * nobody worked. `reportedMinutes` is zero under the line and the rounded
+ * total above it, and ONLY the card comment and the Floor dialog use it.
+ */
+test("reportedMinutes: silent under a minute, honest above it", () => {
+  const P = win.WFPhase;
+  const t0 = Date.parse("2020-06-01T07:00:00.000Z");
+  const span = (ms) => ({ percentComplete: 0, segments: [{
+    start: new Date(t0).toISOString(), end: new Date(t0 + ms).toISOString() }] });
+
+  assert.equal(P.reportedMinutes(span(0)), 0);
+  assert.equal(P.reportedMinutes(span(31000)), 0,
+    "THE POINT: totalMinutes says 1 here, and 1 is a lie to print");
+  assert.equal(P.totalMinutes(span(31000)), 1,
+    "fixture: the rounding reportedMinutes exists to refuse");
+  assert.equal(P.reportedMinutes(span(59999)), 0, "just under the line");
+  assert.equal(P.reportedMinutes(span(60000)), 1, "exactly a minute is worth saying");
+  assert.equal(P.reportedMinutes(span(89999)), 1);
+  assert.equal(P.reportedMinutes(span(90000)), 2, "and it rounds like totalMinutes above the line");
+  assert.equal(P.reportedMinutes(span(5400000)), 90);
+  assert.equal(P.reportedMinutes(null), 0);
+
+  // Above the line the two must never diverge -- costing and the comment
+  // disagreeing about a real job is its own bug.
+  [60000, 61000, 150000, 5400000, 8 * 3600000].forEach((ms) => {
+    assert.equal(P.reportedMinutes(span(ms)), P.totalMinutes(span(ms)),
+      "they must agree on real time (" + ms + "ms)");
+  });
+});
+
+test("a job kept for its percent with 31 seconds on it is told about no minutes",
+  async () => {
+    /* The exact sentence this was built to stop: "1 min already logged stays
+     * on the job", on a job where nobody worked a minute. */
+    const { w, t, meta, store, comments } = releaseEnv(31 / 60, { percentComplete: 25 });
+    assert.equal(w.WFPhase.totalMinutes(store["c1/phaseWork"]), 1,
+      "fixture: the rounding that produced the sentence");
+    assert.equal(w.WFPhase.leavesNoTrace(store["c1/phaseWork"]), false,
+      "fixture: the percent keeps it, so a comment does get written");
+
+    const out = await w.WFPhase.release(t, meta, GIVER);
+
+    assert.equal(out.cleared, false, "the quarter of a job stays");
+    assert.equal(out.minutes, 0, "and no minute is claimed for it");
+    assert.equal(comments.length, 1);
+    assert.doesNotMatch(comments[0], /min already logged/,
+      "THE DEFECT: the card announced a minute nobody worked");
+    assert.match(comments[0], /Progress so far stays on the job/);
+  });
+
+/* ===================================== NaN: which way does each one fail?
+ *
+ * `Math.max(0, NaN)` is NaN, so the clamp does NOT launder an unparseable
+ * date -- and that is deliberate. Everything downstream has to fail towards
+ * KEEPING the record, never towards deleting one we cannot measure. Each
+ * answer is pinned below with the direction it fails in, so a later tidy-up
+ * cannot invert one of them quietly.
+ */
+test("NaN: an unmeasurable segment fails towards keeping, in all four answers", () => {
+  const P = win.WFPhase;
+  const bad = { percentComplete: 0, segments: [{ start: "not a date", end: null }] };
+
+  assert.ok(Number.isNaN(P.elapsedMs(bad)),
+    "the clamp does not turn an unmeasurable segment into a measured zero -- " +
+    "Math.max(0, NaN) is NaN, and a laundered 0 would read as 'nobody worked'");
+  assert.ok(Number.isNaN(P.totalMinutes(bad)), "so the total is NaN");
+  assert.ok(Number.isNaN(P.reportedMinutes(bad)),
+    "and so is the reported figure: `NaN < 60000` is false, so it takes the " +
+    "rounding branch");
+
+  // The direction each one fails in. These are the assertions that matter.
+  assert.equal(P.leavesNoTrace(bad), false,
+    "KEEP: `NaN < 60000` is false, so an unreadable clock is never grounds to delete");
+  assert.ok(!P.reportedMinutes(bad),
+    "SILENT: NaN is falsy, so the comment falls back to 'Progress so far stays' " +
+    "rather than printing 'NaN min already logged'");
+  assert.ok(!P.totalMinutes(bad),
+    "and NaN is falsy everywhere `totalMinutes` is used as a truth test, so no " +
+    "caller prints it either -- it is still NaN in any caller that does arithmetic");
+
+  // Every malformed shape, same direction.
+  [{ start: "not a date", end: "2020-01-01T00:00:00.000Z" },
+   { end: "2020-01-01T00:00:00.000Z" },
+   { start: "2020-01-01T00:00:00.000Z", end: "garbage" },
+   { start: null, end: null }].forEach((seg, i) => {
+    const w2 = { percentComplete: 0, segments: [seg] };
+    assert.equal(P.leavesNoTrace(w2), false, "malformed shape " + i + " must be kept");
+  });
+
+  // Real hours plus one unreadable segment: still kept. This is the case where
+  // failing the other way would cost a day.
+  const mixed = { percentComplete: 0, segments: [
+    { start: new Date(Date.now() - 90 * MIN).toISOString(), end: new Date().toISOString() },
+    { start: "not a date", end: null }
+  ] };
+  assert.equal(P.leavesNoTrace(mixed), false,
+    "ninety real minutes are not erased by one segment we cannot parse");
+});
+
+test("NaN: `release` keeps the record and says nothing about minutes", async () => {
+  const { w, t, meta, store, comments } = releaseEnv(null);
+  store["c1/phaseWork"].segments = [{ start: "not a date", end: null }];
+
+  const out = await w.WFPhase.release(t, meta, GIVER);
+
+  assert.equal(out.cleared, false, "KEEP -- we could not measure it, so we do not bin it");
+  assert.ok(store["c1/phaseWork"], "the record is still there");
+  assert.ok(Number.isNaN(out.minutes),
+    "`minutes` is NaN, and that is pinned rather than fixed: the ONE caller " +
+    "(floor.js confirmRelease, via doWrite) discards the return value, so " +
+    "nothing persists it. A caller that starts reading it must handle this.");
+  assert.equal(comments.length, 1);
+  assert.doesNotMatch(comments[0], /NaN/, "the card must never be shown the word NaN");
+  assert.match(comments[0], /Progress so far stays on the job/);
+});

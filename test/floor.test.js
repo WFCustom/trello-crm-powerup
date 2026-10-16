@@ -2424,6 +2424,9 @@ function benchCard(work) {
 }
 
 const ago = (ms) => new Date(Date.now() - ms).toISOString();
+/* The other direction, for the clock-skew rows: a tablet running fast
+ * writes a `start` that has not happened yet. */
+const ahead = (ms) => new Date(Date.now() + ms).toISOString();
 
 /** Open the Floor, press "Give it back", and hand back the live env. */
 async function openGiveBack(card) {
@@ -2516,7 +2519,34 @@ test("what the dialog promises is what release does, in every state a bench sees
       { name: "an assignment with no segments and no percent",
         work: { segments: [], percentComplete: 0,
                 assignedBy: { username: "boss", fullName: "The Boss" } },
-        erases: true }
+        erases: true },
+
+      /* ADDED: the two the clamp and `reportedMinutes` were built for. Both
+       * are rows where the dialog and the write used to part company. */
+
+      { name: "SKEW: ninety real minutes, plus a fast tablet's future start",
+        /* A shop tablet two hours fast stamps a `start` in the future. Read
+         * here, on a machine whose clock is right, that segment measures minus
+         * two hours and used to cancel the ninety real minutes either side of
+         * it -- so `leavesNoTrace` said yes, the dialog promised an untouched
+         * card, and pressing the button DELETED A DAY'S WORK. Clamped per
+         * segment, the bad stretch counts as nothing and the record stays. */
+        work: { segments: [
+                  { start: ago(5 * 3600000), end: ago(4 * 3600000) },        // 60 min
+                  { start: ago(3 * 3600000), end: ago(2.5 * 3600000) },      // 30 min
+                  { start: ahead(2 * 3600000), end: null }                   // bad clock
+                ], percentComplete: 0 },
+        erases: false },
+
+      { name: "31 seconds at 25% -- kept for the bar, not for the clock",
+        /* The only state where `reportedMinutes` and `totalMinutes` differ and
+         * it reaches a screen. The percent keeps the record, so the dialog
+         * takes the "it stays" branch -- and must NOT fill that branch with
+         * `WFTables.elapsedMinutes`, which rounds 31 seconds to 1 and prints
+         * "0:01 is already logged against Kevin Moss. That time stays". A
+         * minute nobody worked, quoted at the welder as a fact. */
+        work: { segments: [{ start: ago(31000), end: null }], percentComplete: 25 },
+        erases: false, noClock: true }
     ];
 
     for (const s of states) {
@@ -2540,6 +2570,20 @@ test("what the dialog promises is what release does, in every state a bench sees
         assert.doesNotMatch(note, /looking untouched/,
           "and must not promise an untouched card" + why);
         assert.equal(asked, 1, "something is kept, so a reason is offered" + why);
+        if (s.noClock) {
+          /* Under a minute on the clock there is no reading to quote. The
+           * dialog must say the progress stays and stop there -- naming a
+           * duration here means it has gone back to asking a rounding
+           * function instead of `WFPhase.reportedMinutes`. */
+          assert.match(note, /The progress on it stays on the job/,
+            "it promises the progress, with no minutes named" + why);
+          assert.doesNotMatch(note, /is already logged against/,
+            "and must not announce logged time" + why);
+          assert.doesNotMatch(note, /\d+:\d\d/,
+            "and must not quote ANY clock reading" + why);
+          assert.doesNotMatch(note, /keeps their name on it/,
+            "nor attribute a minute to anybody" + why);
+        }
       }
 
       env.win.alert = (m) => { throw new Error("the press threw: " + m + why); };

@@ -1248,7 +1248,10 @@
    */
   function confirmRelease(st) {
     var w = WFTables.activeWork(st.job) || {};
-    var mins = WFTables.elapsedMinutes(w);
+    // reportedMinutes, not elapsedMinutes: the latter rounds 31 seconds up to
+    // a minute, so a job kept for its percent would be announced as carrying
+    // a minute of work nobody did.
+    var mins = WFPhase.reportedMinutes(w);
     // WFPhase decides this, not the dialog. Asking separately is how the two
     // came to contradict each other -- elapsedMinutes rounds, so a 31-second
     // mis-tap read as "0:01 logged, that time stays" and was then deleted
