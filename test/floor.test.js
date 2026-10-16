@@ -1473,7 +1473,15 @@ test("the preview's own button is what starts the job", async () => {
 
   const btn = footBtn($(node, '[data-station="s1"]')[0]);
   assert.ok(btn, "the preview carries a button");
-  assert.match(textOf(btn), /Start this job/);
+  assert.match(textOf(btn), /Claim job/);
+  /* The clock still starts here -- that has not changed and is the whole
+   * reason taking a job is deliberate. What went is narrating it at the
+   * welder: a screen that announces it is timing you is the shortest route to
+   * timings that are not true. Asserted on the whole footer, not just the
+   * button, because the line that said it lived beside the button. */
+  const foot = $($(node, '[data-station="s1"]')[0], ".wf-cp-foot")[0];
+  assert.equal(/clock/i.test(textOf(foot)), false,
+    "nothing on a plain claim mentions a clock: " + textOf(foot));
 
   btn.dispatchEvent(new env.win.Event("click"));
   await settle(env);
@@ -1493,7 +1501,7 @@ test("on a busy bench the preview's button says what it will put down, and asks"
   await settle(busyEnv);
 
   const btn = footBtn($(node, '[data-station="s1"]')[0]);
-  assert.match(textOf(btn), /Put down .* and start this/);
+  assert.match(textOf(btn), /Put down .* and claim this/);
 
   btn.dispatchEvent(new busyEnv.win.Event("click"));
   const body = textOf(busyEnv.win.document.body);
@@ -2268,4 +2276,309 @@ test("the shop view keeps the blast booth's work out of the powder booth's list"
     assert.match(textOf(powder()), /#2501 ready for powder/);
     assert.ok(!/#2500 not blasted yet/.test(textOf(powder())),
       "and the powder booth is not offered work nobody has blasted");
+  });
+
+/* ======================================================= giving a job back
+ *
+ * The way out of a claim. It has to be on the screen in every state a claimed
+ * job can be in, because the states somebody most wants out of -- paused, a
+ * fault open, a signature already taken on the wrong bench -- are exactly the
+ * ones a return-early would hide it in.
+ */
+
+const giveBack = (col) =>
+  $(col, "button.wf-fl-link").find((b) => /Give it back/.test(textOf(b)));
+
+/** A dialog button, by what it says. */
+const dlgBtn = (env, label) =>
+  $(env.win.document.body, ".wf-btn").find((b) => textOf(b) === label);
+
+test("the way out of a claim is on the bench in every state a claim can be in",
+  async () => {
+    const states = {
+      running: job("B", "LA", { claimed: KEV, running: true, pct: 30 }),
+      paused: job("B", "LA", { claimed: KEV, pct: 30 }),
+      unclaimed: Object.assign(job("B", "LA", { claimed: KEV }), {})
+    };
+    // A job on the bench with a signature already taken.
+    states.signed = job("B", "LA", { claimed: KEV, running: true });
+    states.signed.qcRecord = {
+      listId: "LA", status: "passed", signedAt: new Date().toISOString(),
+      signature: "Kevin Moss", signedBy: KEV
+    };
+    // A job on the bench with an open fault -- Complete is replaced by the
+    // fault count, and the way out must survive that substitution.
+    states.faulted = job("B", "LA", { claimed: KEV, running: true });
+    states.faulted.qcRecord = {
+      listId: "LA", phase: "Assemble Legacy", mode: "floor",
+      status: "awaiting_correction",
+      template: [{ text: "Frame is square", spec: "" }],
+      rounds: [{ n: 1, results: ["fail"], notes: { 0: "twisted" },
+                 foundBy: KEV, checkedAt: new Date().toISOString() }]
+    };
+
+    for (const name of Object.keys(states)) {
+      const env = boot({ role: "worker", saved: ONE_STATION, cards: [states[name]] });
+      const node = await render(env, 1280);
+      const col = $(node, '[data-station="s1"]')[0];
+      assert.ok(giveBack(col), "no way out of a claim while " + name);
+    }
+  });
+
+test("giving back a claim nobody worked clears it, and asks nothing about why",
+  async () => {
+    /* THE REPORTED CASE. Scott claimed it, no time was logged, and there was
+     * no way to undo it. The dialog has no "why" box here on purpose: there is
+     * nothing to explain, because nothing is being left behind. */
+    const card = job("B", "LA", { claimed: KEV, running: true });
+    // Claimed moments ago: the clock IS running and still reads zero minutes.
+    card.phaseWork.segments = [{ start: new Date(Date.now() - 1000).toISOString() }];
+    const env = boot({ role: "worker", saved: ONE_STATION, cards: [card] });
+    // The fixture hangs phase work off the card; WFPhase reads it back out of
+    // plugin data, so the real write path needs it in both places.
+    env.store.phaseWork = card.phaseWork;
+    const node = await render(env, 1280);
+
+    giveBack($(node, '[data-station="s1"]')[0]).dispatchEvent(new env.win.Event("click"));
+    const body = env.win.document.body;
+    assert.match(textOf(body), /Nothing has been logged against it/);
+    assert.equal($(body, 'input[placeholder="Why? (optional)"]').length, 0,
+      "no reason is asked for, because nothing is kept to explain");
+
+    /* AND PRESSING IT MUST NOT THROW. confirmRelease reads `why.value`
+     * whichever branch it is in, and in this one `why` was never put in the
+     * DOM -- an orphan input, which still answers "". A guard that only
+     * created it in the non-zero branch would be a TypeError on the exact
+     * press this feature exists for, and O.btn turns that into an alert()
+     * rather than a visible failure. */
+    env.win.alert = (m) => { throw new Error("the press threw: " + m); };
+    dlgBtn(env, "Put it back").dispatchEvent(new env.win.Event("click"));
+    await settle(env, 12);
+
+    assert.deepEqual(env.written.map((w) => w[0]), ["phaseWork"]);
+    assert.equal(env.written[0][1], null, "removed, not rewritten empty");
+    assert.equal(env.store.phaseWork, undefined);
+  });
+
+test("giving back a worked claim says what happens to the hours, and asks why",
+  async () => {
+    const card = job("B", "LA", { claimed: KEV, running: true, pct: 40 });
+    const env = boot({ role: "worker", saved: ONE_STATION, cards: [card] });
+    env.store.phaseWork = card.phaseWork;
+    const node = await render(env, 1280);
+    giveBack($(node, '[data-station="s1"]')[0]).dispatchEvent(new env.win.Event("click"));
+
+    const body = env.win.document.body;
+    const said = textOf(body);
+    assert.match(said, /1:30 is already logged against Kevin Moss/);
+    assert.match(said, /That time stays on the job/);
+    const why = $(body, 'input[placeholder="Why? (optional)"]')[0];
+    assert.ok(why, "real work changing hands is worth a line of explanation");
+    why.value = "wrong bench";
+
+    env.win.alert = (m) => { throw new Error("the press threw: " + m); };
+    dlgBtn(env, "Put it back").dispatchEvent(new env.win.Event("click"));
+    await settle(env, 12);
+
+    const wrote = env.written.filter((w) => w[0] === "phaseWork");
+    assert.equal(wrote.length, 1);
+    const work = wrote[0][1];
+    assert.ok(work, "the work is kept, because the hours are real");
+    assert.equal(work.claimedBy, null, "but the claim is gone");
+    assert.equal(work.segments[0].by, "kevinmoss", "and the hour stays Kevin's");
+    assert.ok(work.segments[0].end, "the clock stopped on the way out");
+  });
+
+/* ============================ the dialog and the write must say the same thing
+ *
+ * THE DEFECT THESE EXIST FOR. The confirm dialog decided what to promise by
+ * asking `WFTables.elapsedMinutes`, which ROUNDS, while `release` decided what
+ * to do by measuring milliseconds and also counting the percent bar. The two
+ * disagreed in both directions at once:
+ *
+ *   a 31-second mis-tap -> dialog: "0:01 is already logged, that time stays"
+ *                          release: deleted the record outright
+ *   a job at 25%, no clock -> dialog: "the card goes back to looking untouched"
+ *                             release: kept the record
+ *
+ * Both are a screen telling a welder one thing and doing another, which is the
+ * failure mode that stops people trusting the tablet. `WFPhase.leavesNoTrace`
+ * is now the only answer to "would this vanish", and the tests below assert the
+ * AGREEMENT rather than either side on its own -- a table that pins the
+ * expected outcome per state by hand, so a change to the predicate cannot move
+ * the dialog and the assertion in step and look correct.
+ */
+
+/** The note line inside the dialog that is currently open, and nothing else. */
+function dlgNote(env) {
+  const back = env.win.document.body.lastElementChild;
+  const n = back && back.querySelector(".muted");
+  return n ? textOf(n) : "";
+}
+
+/** A card on station s1 carrying exactly the phase work handed in. */
+function benchCard(work) {
+  const card = job("B", "LA", { claimed: KEV });
+  card.phaseWork = Object.assign({ listId: "LA", claimedBy: KEV }, work);
+  return card;
+}
+
+const ago = (ms) => new Date(Date.now() - ms).toISOString();
+
+/** Open the Floor, press "Give it back", and hand back the live env. */
+async function openGiveBack(card) {
+  const env = boot({ role: "worker", saved: ONE_STATION, cards: [card] });
+  // The fixture hangs phase work off the card for the renderer; WFPhase reads
+  // it back out of plugin data, so the real write path needs it in both.
+  env.store.phaseWork = card.phaseWork;
+  const node = await render(env, 1280);
+  const btn = giveBack($(node, '[data-station="s1"]')[0]);
+  assert.ok(btn, "no way out of this claim on the bench");
+  btn.dispatchEvent(new env.win.Event("click"));
+  return env;
+}
+
+/* Wording families. A note must be squarely in one of them and nowhere near
+ * the other -- "it promises erasure" and "it promises the work stays" are the
+ * only two things this dialog is allowed to say. */
+const PROMISES_ERASURE = /Nothing has been logged against it[\s\S]*looking untouched/;
+const PROMISES_IT_STAYS = /stays[\s\S]*on the job/;
+
+test("the percent-only round trip: assigned, dragged to 25%, given back, re-claimed",
+  async () => {
+    /* The reported corner, walked the whole way. A manager assigns the job --
+     * `segments: []` -- the welder drags the bar to a quarter without ever
+     * pressing Start, and puts it back.
+     *
+     * Before the fix the dialog told them the card would go back to looking
+     * untouched, `release` kept the record anyway, and the NEXT claim then
+     * threw the quarter away: `claimAndStart` adopted prior work only when it
+     * had segments, so a percent with no clock was invisible to it. Three
+     * places, three different opinions about what "work" means. */
+    const card = benchCard({ segments: [], percentComplete: 25,
+                             assignedBy: { username: "boss", fullName: "The Boss" } });
+    const env = await openGiveBack(card);
+
+    // 1. The dialog must NOT promise erasure, and MUST ask why.
+    const note = dlgNote(env);
+    assert.doesNotMatch(note, /looking untouched/,
+      "a quarter of a job is not an untouched card");
+    assert.match(note, /The progress on it stays on the job/,
+      "it promises the progress survives -- with no clock, so no minutes named");
+    assert.doesNotMatch(note, /0:00/, "and no imaginary clock reading");
+    assert.ok($(env.win.document.body, 'input[placeholder="Why? (optional)"]')[0],
+      "something is being left behind, so there is something to explain");
+
+    // 2. The write must keep it, as promised.
+    env.win.alert = (m) => { throw new Error("the press threw: " + m); };
+    dlgBtn(env, "Put it back").dispatchEvent(new env.win.Event("click"));
+    await settle(env, 12);
+
+    const kept = env.store.phaseWork;
+    assert.ok(kept, "the record survives, exactly as the dialog said");
+    assert.equal(kept.claimedBy, null, "but the bench is clear");
+    assert.equal(kept.percentComplete, 25);
+
+    // 3. And the next person to claim it continues from 25, not from zero.
+    const meta = { id: "B", idList: "LA", idBoard: "OPS" };
+    const next = await env.win.WFPhase.claimAndStart(env.ctx.t, meta, SCOTT);
+    assert.equal(next.percentComplete, 25,
+      "THE DEFECT: this read 0, after the card had promised in writing it would not");
+    assert.equal(next.claimedBy.username, SCOTT.username);
+    assert.equal(env.store.phaseWork.percentComplete, 25, "and that is what is stored");
+  });
+
+test("what the dialog promises is what release does, in every state a bench sees",
+  async () => {
+    /* ONE INVARIANT, TABLE-DRIVEN. `erases` is written down per state by hand
+     * rather than read back out of `leavesNoTrace`, because a test that asks
+     * the predicate what to expect agrees with the predicate by construction
+     * and would have passed throughout the original bug. The predicate is
+     * checked against the table; the dialog is checked against the table; the
+     * write is checked against the table. Nothing is allowed to define its own
+     * right answer. */
+    const states = [
+      { name: "a fresh claim, ten seconds old",
+        work: { segments: [{ start: ago(10000), end: null }], percentComplete: 0 },
+        erases: true },
+      { name: "a mis-tap noticed after 31 seconds (rounds to 1 min)",
+        work: { segments: [{ start: ago(31000), end: null }], percentComplete: 0 },
+        erases: true },
+      { name: "ninety minutes on the clock",
+        work: { segments: [{ start: ago(90 * 60000), end: null }], percentComplete: 0 },
+        erases: false },
+      { name: "no clock at all, but the bar is at 25%",
+        work: { segments: [], percentComplete: 25 },
+        erases: false },
+      { name: "ninety minutes and 60%",
+        work: { segments: [{ start: ago(90 * 60000), end: null }], percentComplete: 60 },
+        erases: false },
+      { name: "an assignment with no segments and no percent",
+        work: { segments: [], percentComplete: 0,
+                assignedBy: { username: "boss", fullName: "The Boss" } },
+        erases: true }
+    ];
+
+    for (const s of states) {
+      const why = " [" + s.name + "]";
+      const env = await openGiveBack(benchCard(s.work));
+
+      // The predicate itself, against the hand-written expectation.
+      assert.equal(env.win.WFPhase.leavesNoTrace(env.store.phaseWork), s.erases,
+        "leavesNoTrace disagrees with the table" + why);
+
+      const note = dlgNote(env);
+      const asked = $(env.win.document.body, 'input[placeholder="Why? (optional)"]').length;
+
+      if (s.erases) {
+        assert.match(note, PROMISES_ERASURE, "the dialog must promise erasure" + why);
+        assert.doesNotMatch(note, PROMISES_IT_STAYS,
+          "and must not also promise the work survives" + why);
+        assert.equal(asked, 0, "nothing is kept, so nothing is asked" + why);
+      } else {
+        assert.match(note, PROMISES_IT_STAYS, "the dialog must promise it stays" + why);
+        assert.doesNotMatch(note, /looking untouched/,
+          "and must not promise an untouched card" + why);
+        assert.equal(asked, 1, "something is kept, so a reason is offered" + why);
+      }
+
+      env.win.alert = (m) => { throw new Error("the press threw: " + m + why); };
+      dlgBtn(env, "Put it back").dispatchEvent(new env.win.Event("click"));
+      await settle(env, 12);
+
+      if (s.erases) {
+        assert.equal(env.store.phaseWork, undefined,
+          "the dialog promised erasure and release must deliver it" + why);
+        assert.deepEqual(env.written.filter((w) => w[0] === "phaseWork"),
+          [["phaseWork", null]], "removed, not rewritten empty" + why);
+      } else {
+        const kept = env.store.phaseWork;
+        assert.ok(kept, "the dialog promised the work stays and release must keep it" + why);
+        assert.equal(kept.claimedBy, null, "the claim goes, the work does not" + why);
+        assert.ok((kept.segments || []).every((g) => !g.start || g.end),
+          "and nothing is left running on a job nobody holds" + why);
+      }
+    }
+  });
+
+test("the dialog never quotes a clock reading the record is about to lose",
+  async () => {
+    /* The 31-second case said "0:01 is already logged against Kevin Moss. That
+     * time stays on the job" and then deleted the lot. Whatever else changes,
+     * a note that names a duration is a note that must be followed by a write
+     * that keeps one. */
+    for (const ms of [1000, 20000, 31000, 45000, 59000]) {
+      const env = await openGiveBack(benchCard({
+        segments: [{ start: ago(ms), end: null }], percentComplete: 0
+      }));
+      const note = dlgNote(env);
+      assert.doesNotMatch(note, /is already logged against/,
+        "under a minute must not be announced as logged time (" + ms + "ms)");
+      assert.match(note, PROMISES_ERASURE, "it is a mis-tap (" + ms + "ms)");
+
+      env.win.alert = (m) => { throw new Error("the press threw: " + m); };
+      dlgBtn(env, "Put it back").dispatchEvent(new env.win.Event("click"));
+      await settle(env, 12);
+      assert.equal(env.store.phaseWork, undefined, "and it goes (" + ms + "ms)");
+    }
   });

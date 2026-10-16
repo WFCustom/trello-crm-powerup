@@ -1987,3 +1987,705 @@ test("the handover stamp costs a username per segment, and nothing when it never
     assert.ok(JSON.stringify(store["c1/phaseLog"]).length < w.WFStore.MARGIN,
       "and the log still fits what the card can hold");
   });
+
+/* ===================================================== giving a job back
+ *
+ * Claiming used to be a one-way door. The reported case is the plainest one
+ * there is -- "Scott claimed it, no time was logged" -- and it is the one the
+ * code has to get right first, because it is a mis-tap and a mis-tap should
+ * leave nothing behind.
+ */
+
+const GIVER = { id: "s", username: "scottv", fullName: "Scott VanWorkom" };
+
+/** benchEnv, with the clock set to a chosen number of minutes ago. */
+function releaseEnv(minutesAgo, extra) {
+  const env = benchEnv();
+  const seg = minutesAgo === null
+    ? []
+    : [{ start: new Date(Date.now() - minutesAgo * 60000).toISOString(), end: null }];
+  env.store["c1/phaseWork"] = Object.assign({
+    listId: env.stage.listId,
+    claimedBy: env.worker,
+    assignedBy: null,
+    tableId: "s1",
+    queuePos: 2,
+    segments: seg,
+    percentComplete: 0
+  }, extra || {});
+  return env;
+}
+
+test("a claim nobody worked is removed outright, and the card is told nothing",
+  async () => {
+    // The reported case: claimed seconds ago, so the clock IS running and the
+    // elapsed time still rounds to zero minutes.
+    const { w, t, store, meta, comments } = releaseEnv(0.02);
+    const live = store["c1/phaseWork"];
+    assert.equal(w.WFPhase.isRunning(live), true, "fixture: the segment is open");
+    assert.equal(w.WFPhase.totalMinutes(live), 0, "fixture: nothing has accrued yet");
+
+    const out = await w.WFPhase.release(t, meta, GIVER);
+
+    assert.deepEqual(out, { cleared: true, minutes: 0 });
+    assert.equal(store["c1/phaseWork"], undefined,
+      "the phase work is gone, not left as a claimless husk");
+    assert.deepEqual(comments, [],
+      "a mis-tap must not outlive itself as a comment on the card");
+  });
+
+test("removing phase work with a segment still open leaves nothing dangling",
+  async () => {
+    const { w, t, store, meta } = releaseEnv(0.02);
+    await w.WFPhase.release(t, meta, GIVER);
+
+    // Nothing in the card's scope still refers to that work -- the open
+    // segment went with the record that held it.
+    const all = await t.get("c1", "shared");
+    assert.equal(all.phaseWork, undefined);
+    assert.ok(!Object.keys(store).some((k) => k === "c1/phaseWork"));
+
+    // And the next person starting it begins from zero rather than resuming
+    // somebody else's open clock.
+    const fresh = await w.WFPhase.claimAndStart(t, meta, GIVER);
+    assert.equal(fresh.segments.length, 1);
+    assert.equal(w.WFPhase.totalMinutes(fresh), 0);
+  });
+
+test("a worked claim keeps its hours, stamps them, and the card says how many",
+  async () => {
+    const { w, t, store, meta, worker, comments } =
+      releaseEnv(90, { assignedBy: { username: "boss" }, takenFrom: { username: "kev" } });
+
+    const out = await w.WFPhase.release(t, meta, GIVER, { reason: "wrong bench" });
+
+    assert.equal(out.cleared, false);
+    assert.ok(out.minutes >= 89 && out.minutes <= 91, "the minutes come back");
+
+    const work = store["c1/phaseWork"];
+    assert.ok(work, "the work stays -- somebody really did build this");
+    assert.equal(work.claimedBy, null, "but nobody holds it");
+    assert.equal(work.assignedBy, null);
+    assert.equal(work.tableId, null, "and it is off the bench");
+    assert.equal(work.queuePos, null);
+    assert.equal("takenFrom" in work, false, "a stale handover note goes with the claim");
+
+    assert.equal(work.segments.length, 1);
+    assert.ok(work.segments[0].end, "the running segment was closed");
+    assert.equal(work.segments[0].by, worker.username,
+      "the hour stays Mike's -- unstamped would mean 'whoever holds the claim', and nobody does");
+    assert.deepEqual(w.WFPhase.minutesByPerson(work), { [worker.username]: out.minutes });
+
+    const said = comments.join(" | ");
+    assert.match(said, /Scott VanWorkom put this back as unclaimed/);
+    assert.match(said, /was Mike Ross/, "who had it");
+    assert.match(said, new RegExp(out.minutes + " min already logged stays"));
+    assert.match(said, /wrong bench/, "and the reason, when one is given");
+  });
+
+test("release on a card with no open work answers null and writes nothing",
+  async () => {
+    const { w, t, store, meta, comments } = releaseEnv(90);
+    const bare = Object.assign({}, meta, { id: "nope" });
+    const before = JSON.stringify(store);
+
+    assert.equal(await w.WFPhase.release(t, bare, GIVER), null);
+    assert.equal(JSON.stringify(store), before, "nothing was written or removed");
+    assert.deepEqual(comments, []);
+  });
+
+test("phase work left over from an earlier list is not something you can give back",
+  async () => {
+    const { w, t, store, meta, comments } = releaseEnv(90);
+    store["c1/phaseWork"].listId = "some-other-list";
+    assert.equal(await w.WFPhase.release(t, meta, GIVER), null,
+      "stale work belongs to a phase this card has already left");
+    assert.ok(store["c1/phaseWork"], "and it is not quietly destroyed either");
+    assert.deepEqual(comments, []);
+  });
+
+/* AFTER THE RELEASE, WHERE DOES THE JOB GO?
+ *
+ * `release` nulls tableId, which takes the job off the bench. If nothing then
+ * picked it up as loose work in the phase it would simply disappear from the
+ * Floor -- the job would be "given back" to nobody, which is worse than not
+ * being able to give it back at all. */
+test("a released job comes back in the station queue, both ways round", async () => {
+  const PHASE = "Assemble Legacy";
+  const cfg = { stages: [{ listId: "LA", name: PHASE, order: 8, isWorkPhase: true }] };
+  const bench = { id: "s1", area: "shop", table: "Station #1", station: "Welding",
+                  welder: "kevinmoss", phase: PHASE, type: "weld" };
+  const card = (phaseWork) => ({
+    id: "R", name: "#R job", idList: "LA", pos: 100, due: null, labelNames: [],
+    phaseWork: phaseWork
+  });
+
+  // (a) the mis-tap: phase work removed outright.
+  const gone = T.stationState(cfg, [card(null)], bench);
+  assert.equal(gone.job, null, "the bench is clear");
+  assert.deepEqual(gone.queue.map((c) => c.id), ["R"],
+    "and the job is back in the queue, not vanished");
+
+  // (b) the worked release: phase work survives with no claim and no bench.
+  const kept = T.stationState(cfg, [card({
+    listId: "LA", claimedBy: null, assignedBy: null, tableId: null, queuePos: null,
+    segments: [{ start: new Date(Date.now() - 5400000).toISOString(),
+                 end: new Date().toISOString(), by: "mike" }],
+    percentComplete: 60
+  })], bench);
+  assert.equal(kept.job, null, "still off the bench");
+  assert.deepEqual(kept.queue.map((c) => c.id), ["R"],
+    "loose work in the phase is offered to the station again");
+  assert.equal(kept.status, "open");
+  // And the hours are still on it for whoever picks it up.
+  assert.ok(T.elapsedMinutes(kept.queue[0].phaseWork) >= 89);
+});
+
+/* ============================ picking a given-back job up again
+ *
+ * `release` goes to some trouble to keep the hours on a job somebody really
+ * worked, and for a while that trouble bought nothing: `claimAndStart` wrote a
+ * brand-new phaseWork object on the very next claim and the segments, the
+ * percent and the names on them all went in the bin. The careful half of
+ * `release` was decoration.
+ *
+ * So the pair below is the contract, and it only reads as a contract when both
+ * halves are asserted together: release preserves, and the next claim ADOPTS
+ * what was preserved.
+ */
+
+/** The two work phases a "it must not leak between phases" test needs. */
+function twoWorkPhases(w) {
+  const boardId = Object.keys(w.WF_CONFIG.boards)[0];
+  const stages = (w.WF_CONFIG.boards[boardId].stages || [])
+    .filter((s) => s.isWorkPhase);
+  const weld = stages[0];
+  const paint = stages.find((s) => s.listId !== weld.listId);
+  if (!paint) throw new Error("config.js needs two distinct work phases");
+  return { boardId, weld, paint };
+}
+
+test("a job given back after real work keeps that work when the next person claims it",
+  async () => {
+    /* THE WHOLE POINT, END TO END. Worker A claims, works ninety minutes,
+     * drags the slider to 60%, gives the job back. Worker B picks it up.
+     * Before the adoption fix B's claim read 0 minutes and 0%, and A's ninety
+     * minutes were not recoverable from anywhere. */
+    const { w, t, store, meta, worker } = releaseEnv(90, { percentComplete: 60 });
+    const A = worker;                     // Mike Ross, who built it
+    const B = TAKER;                      // Kevin Moss, who picks it up
+
+    const given = await w.WFPhase.release(t, meta, A);
+    assert.equal(given.cleared, false, "fixture: this is the worked path, not the mis-tap");
+
+    const claimed = await w.WFPhase.claimAndStart(t, meta, B);
+
+    assert.equal(claimed.claimedBy.username, B.username, "B holds it now");
+    assert.ok(w.WFPhase.totalMinutes(claimed) >= 89,
+      "A's ninety minutes are still on the job (" + w.WFPhase.totalMinutes(claimed) + ")");
+    assert.equal(claimed.percentComplete, 60,
+      "and the job is still 60% built -- the percent is a fact about the job");
+
+    assert.equal(claimed.segments.length, 2, "A's segment plus B's new one");
+    assert.equal(claimed.segments[0].by, A.username,
+      "A's hour is stamped A's, or it would read as B's the moment B holds the claim");
+    assert.ok(claimed.segments[0].end, "and it is closed, not still running");
+    assert.equal(claimed.segments[1].end, null, "B's segment is the open one");
+    assert.equal(claimed.segments[1].by, undefined,
+      "B's own segment needs no stamp -- unstamped means whoever holds the claim");
+
+    const split = w.WFPhase.minutesByPerson(claimed);
+    assert.ok(split[A.username] >= 89 && split[A.username] <= 91,
+      "the ninety minutes are credited to A (" + split[A.username] + ")");
+    assert.ok((split[B.username] || 0) <= 1,
+      "and B, who has just pressed the button, is credited with none of them");
+
+    assert.equal(store["c1/phaseWork"].segments.length, 2,
+      "and it is written to the card, not merely returned");
+  });
+
+test("a mis-tap by the person who picked it up cannot destroy the hours they inherited",
+  async () => {
+    /* The nastiest version of the old bug, one step along: B claims an adopted
+     * job, realises straight away it is not theirs, and gives it back. The
+     * no-trace path keys on elapsed time -- which now includes A's ninety
+     * minutes, so it correctly refuses to treat this as a mis-tap. */
+    const { w, t, store, meta, worker } = releaseEnv(90, { percentComplete: 60 });
+    await w.WFPhase.release(t, meta, worker);
+    await w.WFPhase.claimAndStart(t, meta, TAKER);
+
+    const out = await w.WFPhase.release(t, meta, TAKER);
+
+    assert.equal(out.cleared, false, "there is far too much on this job to erase it");
+    assert.ok(store["c1/phaseWork"], "the record survives B's second thoughts");
+    assert.ok(w.WFPhase.totalMinutes(store["c1/phaseWork"]) >= 89,
+      "with A's hours intact");
+    assert.equal(
+      w.WFPhase.minutesByPerson(store["c1/phaseWork"])[TAKER.username] || 0, 0,
+      "and nothing wrongly credited to B");
+  });
+
+/* ===================================================== phase leakage
+ *
+ * ADOPTION IS ONLY SAFE BECAUSE OF ONE `===`.
+ *
+ * `claimAndStart` now continues whatever phaseWork is on the card, and the
+ * ONLY thing stopping it continuing the PREVIOUS phase's hours is
+ * getActivePhaseWork's `work.listId === cardMeta.idList` check. Two hundred
+ * minutes of welding arriving as the paint booth's opening figure would be
+ * worse than the bug this change fixed: wrong numbers that look right.
+ *
+ * advance() does remove phaseWork on the way out, so in the ordinary case
+ * there is nothing left to leak. But advance deliberately moves the card
+ * BEFORE removing the work (see its comment) precisely so a failed remove is
+ * survivable -- and what makes it survivable is this check. It is belt and
+ * braces, and the braces are the listId.
+ */
+
+test("hours logged in one phase do not follow the card into the next one", async () => {
+  const env = benchEnv();
+  const { boardId, weld, paint } = twoWorkPhases(env.w);
+  const w = env.w, t = env.t, store = env.store;
+
+  // 200 minutes of welding, finished and still sitting on the card -- the
+  // shape left behind when advance() moved the card but its remove did not
+  // land, which is the failure advance's ordering is designed to survive.
+  store["c1/phaseWork"] = {
+    listId: weld.listId,
+    claimedBy: { id: "w", username: "mike", fullName: "Mike Ross" },
+    segments: [{ start: new Date(Date.now() - 200 * 60000).toISOString(),
+                 end: new Date().toISOString() }],
+    percentComplete: 95,
+    checklist: { 0: true, 1: true }
+  };
+  const inWeld = { id: "c1", idList: weld.listId, idBoard: boardId };
+  const inPaint = { id: "c1", idList: paint.listId, idBoard: boardId };
+
+  assert.equal(w.WFPhase.totalMinutes(await w.WFPhase.getActivePhaseWork(t, inWeld)), 200,
+    "fixture: 200 minutes really are on the card");
+  assert.equal(await w.WFPhase.getActivePhaseWork(t, inPaint), null,
+    "the guard itself: work from another list is not active work here");
+
+  const painted = await w.WFPhase.claimAndStart(t, inPaint, TAKER);
+
+  assert.equal(painted.listId, paint.listId, "the new record belongs to the new phase");
+  assert.equal(painted.segments.length, 1, "one segment, just opened");
+  assert.equal(w.WFPhase.totalMinutes(painted), 0,
+    "the paint booth starts at zero, not at 200");
+  assert.equal(painted.percentComplete, 0, "and at 0%, not at 95%");
+  assert.equal(painted.checklist, undefined,
+    "and without the welder's ticked lines");
+  assert.deepEqual(w.WFPhase.minutesByPerson(painted), { [TAKER.username]: 0 },
+    "nobody is credited with welding they did in another column");
+});
+
+test("advance clears the phase work it just logged, so the next phase has nothing to adopt",
+  async () => {
+    /* Belt, to the listId check's braces. If this ever stops being true the
+     * listId check becomes the only thing between two phases' hours, which is
+     * a single `===` carrying the whole weight. */
+    const env = benchEnv();
+    await env.w.WFPhase.complete(env.t, env.meta, { silent: true });
+    assert.ok(env.store["c1/phaseWork"], "fixture: there is work to clear");
+
+    await env.w.WFPhase.advance(env.t, env.meta, GIVER);
+
+    assert.equal(env.store["c1/phaseWork"], undefined,
+      "advance removes phaseWork on the way out");
+    assert.ok(env.store["c1/phaseLog"], "having first written it down");
+  });
+
+/* ===================================================== finished work
+ *
+ * Adoption must not resurrect a job somebody already finished: a completed
+ * phase that gets claimed again should not quietly reopen with its old
+ * segments running. The `!isFinished(prior)` guard is what refuses it.
+ *
+ * The question that guard raises is whether it broke Reopen. It did not --
+ * Reopen is undoComplete, a different function that mutates the record in
+ * place -- and these two tests exist to keep it that way, because a Reopen
+ * that silently started from zero would lose a whole phase's hours and say
+ * nothing about it.
+ */
+
+test("Reopen keeps every minute -- it goes through undoComplete, not through a re-claim",
+  async () => {
+    const { w, t, store, meta, worker } = benchEnv();      // one hour, running
+    await w.WFPhase.complete(t, meta, { silent: true });
+    const finished = store["c1/phaseWork"];
+    assert.equal(w.WFPhase.isFinished(finished), true, "fixture: it is finished");
+    const minutesBefore = w.WFPhase.totalMinutes(finished);
+    assert.ok(minutesBefore >= 59, "fixture: with an hour on it");
+
+    const reopened = await w.WFPhase.undoComplete(t, meta);
+
+    assert.equal(reopened.completedAt, null, "it is open again");
+    assert.equal(w.WFPhase.isFinished(reopened), false);
+    assert.ok(w.WFPhase.totalMinutes(reopened) >= minutesBefore,
+      "and the hour it took is still there (" + w.WFPhase.totalMinutes(reopened) + ")");
+    assert.equal(reopened.claimedBy.username, worker.username,
+      "still the same person's job");
+    assert.equal(w.WFPhase.isRunning(reopened), true, "with the clock running again");
+  });
+
+test("the surfaces that offer Reopen call undoComplete, and never claimAndStart",
+  () => {
+    /* The guard is only safe while this is true. If a screen ever wires Reopen
+     * to Claim & Start, `!isFinished` turns it into "start again from zero"
+     * and the phase's hours go without a word. */
+    ["popups/card-back.js", "popups/tabs/workboard.js", "popups/tabs/myjobs.js"]
+      .forEach((f) => {
+        const src = code(f);
+        const i = src.indexOf("Reopen");
+        assert.ok(i > -1, f + " still offers Reopen");
+        const near = src.slice(i, i + 400);
+        assert.match(near, /undoComplete/, f + ": Reopen reopens the record it has");
+        assert.doesNotMatch(near, /claimAndStart/,
+          f + ": Reopen must not go through the claim path, which starts from zero");
+      });
+  });
+
+test("claiming a FINISHED phase starts a new one rather than resurrecting the old",
+  async () => {
+    /* Not reachable from the Floor -- lib/tables.js drops finished work before
+     * the bench controls render -- but it is what the guard does, and the
+     * behaviour it replaces (adopting a completed record) would reopen a job
+     * nobody meant to reopen. Written down so the trade-off is deliberate. */
+    const { w, t, meta } = benchEnv();
+    await w.WFPhase.complete(t, meta, { silent: true });
+    const stale = await w.WFPhase.getActivePhaseWork(t, meta);
+    stale.claimedBy = null;                 // the only shape that offers Claim
+    await t.set(meta.id, "shared", "phaseWork", stale);
+
+    const fresh = await w.WFPhase.claimAndStart(t, meta, TAKER);
+
+    assert.equal(fresh.segments.length, 1, "a clean record, not the finished one continued");
+    assert.equal(fresh.completedAt, null, "and not still marked finished");
+    assert.equal(w.WFPhase.totalMinutes(fresh), 0);
+  });
+
+/* ============================== three pairs of hands, two ways round
+ *
+ * takeOver stamps the outgoing worker's segments; release stamps them too; and
+ * claimAndStart now stamps any it inherits unstamped. Three writers to one
+ * field is exactly where a segment ends up with the wrong name on it, so both
+ * routes through a three-person job are walked here.
+ */
+
+test("a job taken over, given back and re-claimed credits each person once", async () => {
+  const A = { id: "w", username: "mike", fullName: "Mike Ross" };       // benchEnv's
+  const B = { id: "k", username: "kevinmoss", fullName: "Kevin Moss" };
+  const C = { id: "s", username: "scottv", fullName: "Scott VanWorkom" };
+  const { w, t, meta } = benchEnv();                      // A, one hour, running
+
+  await w.WFPhase.takeOver(t, meta, B);                   // A -> B
+  await w.WFPhase.resume(t, meta);
+  let work = await w.WFPhase.getActivePhaseWork(t, meta);
+  work.segments[work.segments.length - 1].start =
+    new Date(Date.now() - 1800000).toISOString();         // B works 30 min
+  await t.set(meta.id, "shared", "phaseWork", work);
+
+  await w.WFPhase.release(t, meta, B);                    // B gives it back
+  await w.WFPhase.claimAndStart(t, meta, C);              // C picks it up
+
+  work = await w.WFPhase.getActivePhaseWork(t, meta);
+  assert.equal(work.segments.length, 3, "an hour, a half hour, and C just started");
+  assert.equal(work.segments[0].by, A.username, "A's hour is A's");
+  assert.equal(work.segments[1].by, B.username, "B's half hour is B's");
+  assert.equal(work.segments[2].by, undefined,
+    "C's open segment is unstamped, which means 'whoever holds the claim' -- C");
+  assert.equal(work.claimedBy.username, C.username);
+
+  const split = w.WFPhase.minutesByPerson(work);
+  assert.deepEqual(Object.keys(split).sort(), [B.username, A.username, C.username].sort());
+  assert.ok(split[A.username] >= 59 && split[A.username] <= 61, "A: " + split[A.username]);
+  assert.ok(split[B.username] >= 29 && split[B.username] <= 31, "B: " + split[B.username]);
+  assert.ok(split[C.username] <= 1, "C has barely started: " + split[C.username]);
+  assert.equal(Object.keys(split).reduce((n, k) => n + split[k], 0),
+    w.WFPhase.totalMinutes(work), "and the three parts sum to the whole");
+});
+
+test("a job given back twice credits each person once, with nobody's segment reassigned",
+  async () => {
+    // The same chain with no handover in it at all: release is the only thing
+    // stamping, and claimAndStart must leave what it finds alone.
+    const A = { id: "w", username: "mike", fullName: "Mike Ross" };
+    const B = { id: "k", username: "kevinmoss", fullName: "Kevin Moss" };
+    const C = { id: "s", username: "scottv", fullName: "Scott VanWorkom" };
+    const { w, t, meta } = releaseEnv(60);                 // A, one hour, running
+
+    await w.WFPhase.release(t, meta, A);
+    await w.WFPhase.claimAndStart(t, meta, B);
+    let work = await w.WFPhase.getActivePhaseWork(t, meta);
+    work.segments[work.segments.length - 1].start =
+      new Date(Date.now() - 1800000).toISOString();        // B works 30 min
+    await t.set(meta.id, "shared", "phaseWork", work);
+    await w.WFPhase.release(t, meta, B);
+    await w.WFPhase.claimAndStart(t, meta, C);
+
+    work = await w.WFPhase.getActivePhaseWork(t, meta);
+    assert.deepEqual(work.segments.map((s) => s.by),
+      [A.username, B.username, undefined],
+      "one name per segment, in the order the three of them held it");
+
+    const split = w.WFPhase.minutesByPerson(work);
+    assert.ok(split[A.username] >= 59 && split[A.username] <= 61, "A: " + split[A.username]);
+    assert.ok(split[B.username] >= 29 && split[B.username] <= 31, "B: " + split[B.username]);
+    assert.ok(split[C.username] <= 1, "C: " + split[C.username]);
+  });
+
+/* =============== the force-close, and why it must stay unreachable
+ *
+ * claimAndStart closes an inherited still-open segment at its own `start`,
+ * i.e. at ZERO duration. That is right for a segment abandoned by a crash or a
+ * hard refresh -- which would otherwise tick upward forever, since
+ * totalMinutes counts an open segment up to now -- and it is data loss for
+ * anything else. The safety of it rests entirely on nothing that normally
+ * precedes a claim leaving an open segment behind.
+ */
+
+test("release and takeOver both close the running segment, so the force-close never sees it",
+  async () => {
+    const givenBack = releaseEnv(90);
+    await givenBack.w.WFPhase.release(givenBack.t, givenBack.meta, givenBack.worker);
+    const afterRelease = givenBack.store["c1/phaseWork"];
+    assert.ok(afterRelease.segments.every((s) => s.end),
+      "release leaves nothing open for claimAndStart to find");
+
+    const handedOn = benchEnv();
+    await handedOn.w.WFPhase.takeOver(handedOn.t, handedOn.meta, TAKER);
+    assert.ok(handedOn.store["c1/phaseWork"].segments.every((s) => s.end),
+      "takeOver leaves nothing open either");
+
+    // And therefore the ninety minutes survive the next claim intact: if the
+    // force-close had fired, segment 0 would be end === start and read zero.
+    const picked = await givenBack.w.WFPhase.claimAndStart(
+      givenBack.t, givenBack.meta, TAKER);
+    const seg = picked.segments[0];
+    assert.ok(new Date(seg.end) - new Date(seg.start) >= 89 * 60000,
+      "the inherited segment kept its real duration");
+  });
+
+test("the force-close only fires on a segment nothing else closed, and costs that segment",
+  async () => {
+    /* Reached only by hand-built or crash-abandoned data: every ordinary route
+     * out of a claim (release, takeOver, pause, complete) closes the running
+     * segment first. When it does fire it zeroes the abandoned stretch, which
+     * is the deliberate trade -- an unbounded clock is worse than a lost one --
+     * and it is asserted here so the cost is visible rather than discovered. */
+    const { w, t, meta, store } = benchEnv();
+    const abandoned = store["c1/phaseWork"];
+    abandoned.claimedBy = null;                    // nobody holds it...
+    assert.equal(w.WFPhase.isRunning(abandoned), true, "...but the clock is still going");
+    await t.set(meta.id, "shared", "phaseWork", abandoned);
+
+    const picked = await w.WFPhase.claimAndStart(t, meta, TAKER);
+
+    assert.equal(picked.segments.length, 2);
+    assert.equal(picked.segments[0].end, picked.segments[0].start,
+      "the orphaned segment is closed where it started, not left running");
+    assert.equal(w.WFPhase.totalMinutes(picked), 0,
+      "so the clock cannot run away -- at the price of the abandoned stretch");
+  });
+
+/* ======================= a mis-tap is measured in seconds, not in minutes
+ *
+ * totalMinutes rounds, so a claim given back after 31 seconds came back as 1 --
+ * truthy -- and got the full ceremony: phase work left on the card and a
+ * comment announcing that a minute of imaginary work survives. The question
+ * the no-trace path is asking is "did anybody actually do anything", and the
+ * answer has to be read off the clock in milliseconds.
+ */
+
+test("a claim given back after half a minute leaves no trace, rounding notwithstanding",
+  async () => {
+    const { w, t, store, meta, comments } = releaseEnv(31 / 60);     // 31 seconds
+    assert.equal(w.WFPhase.totalMinutes(store["c1/phaseWork"]), 1,
+      "fixture: this is exactly the case rounding gets wrong");
+
+    const out = await w.WFPhase.release(t, meta, GIVER);
+
+    assert.deepEqual(out, { cleared: true, minutes: 0 });
+    assert.equal(store["c1/phaseWork"], undefined, "the mis-tap left nothing behind");
+    assert.deepEqual(comments, [],
+      "and the card was not told about a minute nobody worked");
+  });
+
+test("a dragged slider makes it a real release even with no time on the clock",
+  async () => {
+    /* Somebody who opens a job, drags the bar to a quarter and puts it straight
+     * back has done work the clock cannot see. Clearing the record would throw
+     * that away.
+     *
+     * THIS TEST USED TO ALSO ASSERT A `phaseWork.checklist` CARRY, AND THAT
+     * FIELD DOES NOT EXIST. Nothing in the repo ever writes it -- the shop's
+     * ticks live in Trello's own checklists (lib/cardview.js reads
+     * card.checklists) and in the QC record's rounds (lib/qc.js); the only
+     * `checklist` on phase-adjacent storage is a STATION's chosen checklist
+     * NAME in lib/tables.js. The old half of this test hand-built a field no
+     * writer produces and then proved release protected it, which is coverage
+     * of a fiction: it would have passed whatever release did to real data.
+     * Deleted with the carry it was guarding. */
+    const pct = releaseEnv(0.02, { percentComplete: 25 });
+    const outPct = await pct.w.WFPhase.release(pct.t, pct.meta, GIVER);
+    assert.equal(outPct.cleared, false, "a percent on the bar is work");
+    assert.ok(pct.store["c1/phaseWork"], "so the record stays");
+
+    // Nought minutes, so the comment must not say "0 min already logged".
+    const said = pct.comments.join(" | ");
+    assert.match(said, /Progress so far stays on the job/);
+    assert.doesNotMatch(said, /0 min/,
+      "a release with no clock time must not announce zero minutes of logged work");
+  });
+
+/* ============ the percent-only round trip, from assignment back to the bench
+ *
+ * THE DEFECT. `claimAndStart`'s adoption test read `(prior.segments||[]).length`
+ * and nothing else. A manager's assignment writes `segments: []`, and the
+ * percent slider moves on any phase work whether or not a clock is running --
+ * so a job assigned, dragged to a quarter and put back was PRESERVED by
+ * `release` (which has always counted a percent as work), promised in writing
+ * on the card that the progress stays, and then silently zeroed by the next
+ * person to claim it. Two halves of one feature disagreeing about what "work"
+ * means, with the card's own comment as the written record of the lie.
+ *
+ * Walked end to end through the real entry points rather than hand-built
+ * state, because the bug lived in the seam between them.
+ */
+
+test("a manager's assignment dragged to 25% keeps its 25% through release and re-claim",
+  async () => {
+    const MANAGER = { id: "m", username: "boss", fullName: "The Boss" };
+    const { w, t, store, meta, comments } = benchEnv();
+    delete store["c1/phaseWork"];          // a card with nothing on it yet
+
+    // 1. The manager assigns it. No clock -- that is the whole point of assign.
+    await w.WFPhase.assign(t, meta, MANAGER, GIVER);
+    assert.deepEqual(store["c1/phaseWork"].segments, [],
+      "fixture: an assignment starts with no segments at all");
+
+    // 2. The welder drags the bar to a quarter without ever pressing Start.
+    await w.WFPhase.setPercentComplete(t, meta, 25);
+    const beforeRelease = store["c1/phaseWork"];
+    assert.equal(beforeRelease.percentComplete, 25);
+    assert.equal(w.WFPhase.totalMinutes(beforeRelease), 0, "and the clock never ran");
+    assert.equal(w.WFPhase.leavesNoTrace(beforeRelease), false,
+      "a quarter of a job is work, however little time is on it");
+
+    // 3. They give it back.
+    const out = await w.WFPhase.release(t, meta, GIVER);
+    assert.equal(out.cleared, false, "there is something here worth keeping");
+    assert.ok(store["c1/phaseWork"], "so the record survives the release");
+    assert.equal(store["c1/phaseWork"].percentComplete, 25);
+    assert.equal(store["c1/phaseWork"].claimedBy, null, "but nobody holds it");
+    assert.match(comments.join(" | "), /Progress so far stays on the job/,
+      "and the card is told so in writing -- which is the promise under test");
+
+    // 4. Somebody else picks it up. THIS read 0 before the fix.
+    const next = await w.WFPhase.claimAndStart(t, meta, TAKER);
+    assert.equal(next.percentComplete, 25,
+      "the next claim continues the quarter rather than binning it");
+    assert.equal(w.WFPhase.percentComplete(next), 25);
+    assert.equal(next.claimedBy.username, TAKER.username);
+    assert.equal(next.segments.length, 1, "and starts their own clock, only theirs");
+    assert.equal(w.WFPhase.totalMinutes(next), 0);
+
+    // And it is really on the card, not just in the returned object.
+    assert.equal(store["c1/phaseWork"].percentComplete, 25);
+  });
+
+test("a released claim with neither a percent nor a clock is still binned outright",
+  async () => {
+    /* The other side of the same test: widening the adoption rule must not turn
+     * every mis-tap into a permanent record. An assignment nobody touched has
+     * `segments: []` AND `percentComplete: 0`, and that is nothing. */
+    const MANAGER = { id: "m", username: "boss", fullName: "The Boss" };
+    const { w, t, store, meta } = benchEnv();
+    delete store["c1/phaseWork"];
+
+    await w.WFPhase.assign(t, meta, MANAGER, GIVER);
+    const out = await w.WFPhase.release(t, meta, GIVER);
+
+    assert.deepEqual(out, { cleared: true, minutes: 0 });
+    assert.equal(store["c1/phaseWork"], undefined, "nothing was left behind");
+  });
+
+/* ===================== leavesNoTrace, at every edge somebody can actually hit
+ *
+ * ONE DEFINITION MEANS ONE PLACE TO GET IT WRONG. `release` and the Floor's
+ * confirm dialog both ask this and nothing else, so every lie it can tell is
+ * told twice -- once to the welder and once to the card.
+ */
+
+test("leavesNoTrace: nothing to erase", () => {
+  const L = win.WFPhase.leavesNoTrace;
+  assert.equal(L(null), true, "no work at all erases cleanly");
+  assert.equal(L(undefined), true);
+  assert.equal(L({}), true, "and so does an empty object");
+  assert.equal(L({ segments: [] }), true, "empty segments are not work");
+  assert.equal(L({ segments: [], percentComplete: 0 }), true,
+    "a percent of ZERO is falsy and must not block erasure -- assign() writes it");
+  assert.equal(L({ percentComplete: 0 }), true, "with no segments key at all");
+  assert.equal(L({ segments: null, percentComplete: 0 }), true, "or a null one");
+});
+
+test("leavesNoTrace: anything anybody did is a trace", () => {
+  const L = win.WFPhase.leavesNoTrace;
+  const ago = (ms) => new Date(Date.now() - ms).toISOString();
+
+  assert.equal(L({ segments: [], percentComplete: 1 }), false,
+    "one percent is still somebody's work");
+  assert.equal(L({ segments: [], percentComplete: 25 }), false);
+  assert.equal(L({ segments: [], percentComplete: 100, completedAt: ago(0) }), false,
+    "a FINISHED job is never erased by giving it back");
+  assert.equal(
+    L({ percentComplete: 0, segments: [{ start: ago(5400000), end: ago(0) }] }), false,
+    "ninety minutes on the clock");
+  assert.equal(
+    L({ percentComplete: 0, segments: [{ start: ago(5400000), end: null }] }), false,
+    "and ninety minutes STILL RUNNING is measured to now, not treated as zero");
+});
+
+test("leavesNoTrace: the threshold is sixty seconds, measured in milliseconds", () => {
+  const L = win.WFPhase.leavesNoTrace;
+  const span = (ms) => ({
+    percentComplete: 0,
+    segments: [{ start: "2020-01-01T00:00:00.000Z",
+                 end: new Date(Date.parse("2020-01-01T00:00:00.000Z") + ms).toISOString() }]
+  });
+  assert.equal(L(span(10000)), true, "ten seconds is a mis-tap");
+  assert.equal(L(span(31000)), true,
+    "and so is 31 seconds -- totalMinutes ROUNDS THAT TO 1, which is the bug");
+  assert.equal(win.WFPhase.totalMinutes(span(31000)), 1,
+    "fixture: proving the rounding this predicate has to ignore");
+  assert.equal(L(span(59999)), true, "just under the line");
+  assert.equal(L(span(60000)), false, "exactly a minute is on the job");
+  assert.equal(L(span(60001)), false);
+
+  // Split across two segments, because the sum is what matters, not any one.
+  assert.equal(L({ percentComplete: 0, segments: [
+    { start: "2020-01-01T00:00:00.000Z", end: "2020-01-01T00:00:40.000Z" },
+    { start: "2020-01-01T00:01:00.000Z", end: "2020-01-01T00:01:40.000Z" }
+  ] }), false, "two forty-second stretches are eighty seconds of work");
+});
+
+test("leavesNoTrace: a malformed segment fails towards KEEPING the record", () => {
+  /* An unparseable date makes the arithmetic NaN, and `NaN < 60000` is false,
+   * so the answer is "there is a trace" and the work is kept. That is the right
+   * way round -- refusing to delete data we cannot measure -- and it is
+   * asserted so a later "tidy-up" of the comparison cannot silently invert it
+   * into deleting every record it fails to parse.
+   *
+   * It is not free: `release` returns `minutes: NaN` for these, and the card
+   * comment falls back to "Progress so far stays" because NaN is falsy. Ugly,
+   * but nothing is lost and the dialog says the same thing. */
+  const L = win.WFPhase.leavesNoTrace;
+  assert.equal(L({ percentComplete: 0, segments: [{ start: "not a date", end: null }] }), false);
+  assert.equal(L({ percentComplete: 0, segments: [{ start: "not a date",
+    end: "2020-01-01T00:00:00.000Z" }] }), false);
+  assert.equal(L({ percentComplete: 0, segments: [{ end: "2020-01-01T00:00:00.000Z" }] }), false,
+    "a segment with no start at all");
+  assert.equal(L({ percentComplete: 0, segments: [
+    { start: "2020-01-01T00:00:00.000Z", end: "garbage" }] }), false,
+    "and an unparseable end");
+});

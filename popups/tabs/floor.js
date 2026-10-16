@@ -1217,7 +1217,75 @@
         askComplete(st);
       }
     }));
+
+    /* THE WAY OUT OF A CLAIM. There was not one.
+     *
+     * Claiming was a one-way door: a mis-tap, somebody poking at a tablet, a
+     * job picked up and then handed to the right bench in person -- all of it
+     * left a name on a card that could not be taken off. That matters most in
+     * the first week, when people are still learning the screen, and a system
+     * that cannot be corrected is one they stop trusting fast.
+     *
+     * A quiet link rather than a third big button: it is a rare action and it
+     * should not compete with the two that are not. */
+    row.appendChild(O.el("button.wf-fl-link", {
+      type: "button",
+      style: "flex:0 0 auto;align-self:center",
+      text: "Give it back",
+      title: "Put this job back as unclaimed",
+      onClick: function () { confirmRelease(st); }
+    }));
     return row;
+  }
+
+  /**
+   * Put a job back as unclaimed, and say what happens to any time on it.
+   *
+   * The two cases are genuinely different and the dialog says which one you
+   * are in, because "this leaves no trace" and "the hours stay on the job" are
+   * the facts somebody needs before they tap, and guessing wrong either loses
+   * real work or leaves a mistake on the record.
+   */
+  function confirmRelease(st) {
+    var w = WFTables.activeWork(st.job) || {};
+    var mins = WFTables.elapsedMinutes(w);
+    // WFPhase decides this, not the dialog. Asking separately is how the two
+    // came to contradict each other -- elapsedMinutes rounds, so a 31-second
+    // mis-tap read as "0:01 logged, that time stays" and was then deleted
+    // outright, and a job at 25% with no clock read as "goes back to looking
+    // untouched" and was then kept. Whatever release is about to do, the
+    // welder is told that and not something else.
+    var vanishes = WFPhase.leavesNoTrace(w);
+    var held = w.claimedBy;
+    var why = O.el("input.wf-fl-input", {
+      type: "text", placeholder: "Why? (optional)"
+    });
+
+    O.dialog({
+      title: "Put " + (jobNumber(st.job) || "this job") + " back?",
+      note: vanishes
+        ? "Nothing has been logged against it, so this clears the claim " +
+          "completely and the card goes back to looking untouched."
+        : (mins
+            ? WFTables.clockText(mins) + " is already logged against " +
+              (held ? O.displayName(held) : "this job") + ". That time stays"
+            : "The progress on it stays") +
+          " on the job" + (mins && held ? " and keeps their name on it" : "") +
+          " — what goes is the claim, so the bench clears and anyone can " +
+          "pick it up.",
+      content: vanishes ? null : O.el("div", null, why),
+      buttons: [{
+        label: "Put it back", primary: true, busyText: "Releasing…",
+        onClick: function () {
+          return doWrite(st, function () {
+            return WFPhase.release(state.ctx.t, st.job, claimant(st),
+              { reason: String(why.value || "").trim() });
+          }).catch(function (e) { if (!e || !e.dropped) throw e; });
+        }
+      }, {
+        label: "Keep it", quiet: true
+      }]
+    });
   }
 
   /**
@@ -1928,10 +1996,21 @@
       var mine = held && held.username === claimant(st).username;
       var taking = held && !mine;
 
+      /* THE BUTTON SAYS WHAT THE SHOP CALLS IT, NOT WHAT THE CODE DOES.
+       *
+       * It read "Start this job", with "The clock starts when you do" under it.
+       * The timer is real and still starts here -- that is the whole reason
+       * taking a job was made deliberate -- but narrating it on every tap makes
+       * the screen feel like it is watching you, and a welder who feels watched
+       * by a timer is the shortest route to timings that are not true. The
+       * clock is ours to keep; claiming the job is theirs to do.
+       *
+       * Whose job it is still gets said, because taking one off somebody is a
+       * different act and they should know they are doing it. */
       var label = taking
         ? "Take it from " + O.firstName(held)
-        : st.job ? "Put down " + (jobNumber(st.job) || "that one") + " and start this"
-        : "Start this job";
+        : st.job ? "Put down " + (jobNumber(st.job) || "that one") + " and claim this"
+        : "Claim job";
 
       var row = O.el("div", { style: "display:flex;gap:8px;align-items:center;flex:1" });
       row.appendChild(O.btn(label, {
@@ -1946,12 +2025,13 @@
           requestStart(st, card);
         }
       }));
-      row.appendChild(O.el("div.muted", {
-        style: "font-size:12px",
-        text: taking
-          ? "The clock moves to you, and the card records the hand-over."
-          : "The clock starts when you do."
-      }));
+      // Only the hand-over gets a line of explanation. A plain claim needs
+      // none, and the one it used to carry was about the timer.
+      if (taking) {
+        row.appendChild(O.el("div.muted", {
+          style: "font-size:12px", text: "The card records the hand-over."
+        }));
+      }
       return row;
     };
   }
