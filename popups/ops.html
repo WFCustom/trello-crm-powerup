@@ -22,7 +22,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=Barlow+Condensed:wght@500;600;700&display=swap">
-  <link rel="stylesheet" href="../styles.css?v=20261014a">
+  <link rel="stylesheet" href="../styles.css?v=20261016a">
   <style>
     body { padding: 0; background: var(--wf-ground); }
   </style>
@@ -35,7 +35,7 @@
     <div class="wf-chrome">
     <header class="wf-top">
       <div class="wf-brand">
-        <img src="../icon.svg?v=20261014a" alt="">
+        <img src="../icon.svg?v=20261016a" alt="">
         <div class="wf-wordmark">WESTERN FABRICATION</div>
       </div>
       <div class="wf-boardpill" id="boardName">Loading board…</div>
@@ -59,7 +59,21 @@
     /* Keep in step with index.html and popups/card-back.html, which now carry
        version tokens too -- card-back.html was the last live work surface
        outside this scheme and could serve a months-old lib/phase.js. */
-    window.WF_BUILD = "20261014a";
+    /* HOW TO BUMP THIS, WHICH IS NEVER AN EDIT TO THIS FILE ALONE.
+       (The current value was taken for popups/tabs/install.js.)
+
+       Adding or changing anything under lib/, popups/ or styles.css means every
+       cached ops window has to re-fetch, so this has to become a new value.
+       test/regressions.test.js rightly insists all three HTML surfaces carry
+       the SAME token, because bumping one of the three on its own updates part
+       of the cache and not the rest -- which is worse than updating none of it.
+
+       So the bump is one edit in three files, made together:
+         popups/ops.html      (here, plus styles.css and icon.svg above)
+         index.html           (9 tags)
+         popups/card-back.html (10 tags)
+       Any unused value works; the date plus a letter is the convention. */
+    window.WF_BUILD = "20261016a";
     document.write(
       [
         "../config.js",
@@ -97,6 +111,12 @@
         "./checklist.js",
 
         "./tabs/floor.js",
+        /* Immediately after the Floor, and that position is the point: both
+           read station config through lib/tables.js and both are the same
+           screen for a different crew, so a reader looking for one finds the
+           other. Install declares no roles, exactly as the Floor does -- an
+           installer is shop crew. */
+        "./tabs/install.js",
         "./tabs/dashboard.js",
         "./tabs/workboard.js",
         "./tabs/myjobs.js",

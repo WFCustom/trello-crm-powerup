@@ -17,7 +17,7 @@ const { test } = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
-const { load } = require("./harness");
+const { load, plain } = require("./harness");
 
 const ROOT = path.join(__dirname, "..");
 const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -977,6 +977,83 @@ test("the phantom stations are gone and cannot walk back in", () => {
   assert.ok(!merged.stations.some((s) => s.id === "f4"));
   assert.ok(merged.stations.some((s) => s.id === "x1"),
     "a station the shop really did add is still kept");
+});
+
+test("an install crew's queue spans all four real Install columns", () => {
+  /* THE ONE THAT WOULD MAKE THE INSTALL TAB LOOK EMPTY WITH REAL WORK IN IT.
+   *
+   * The board has FOUR lists called Install -- Next week, Central, North,
+   * South -- and they are one phase of work: one crew, one time allowance, one
+   * checklist. config.js states that by putting `phase: "Install"` on all four,
+   * and WFTables.phaseOf() resolves a card by LIST ID and answers with
+   * `stage.phase || stage.name`. So a crew pointed at the Install phase sees
+   * every card in all four columns.
+   *
+   * Drop `phase:` off one column and that column's cards answer "Install" via
+   * the name anyway -- which is why this asserts on the real config and on a
+   * resolved queue rather than on the literal. Rename one to "Install North"
+   * WITHOUT a phase, though, and a quarter of the shop's install work becomes
+   * invisible to every crew with nothing reporting a problem. test/install.test.js
+   * covers the tab; this covers the board it actually runs against. */
+  const boardId = Object.keys(win.WF_CONFIG.boards)
+    .find((b) => win.WF_CONFIG.boards[b].type === "production");
+  const board = win.WF_CONFIG.boards[boardId];
+
+  const installs = (board.stages || []).filter((s) => (s.phase || s.name) === "Install");
+  assert.equal(installs.length, 4, "four Install columns, as the board has");
+  assert.ok(installs.every((s) => s.phase === "Install"),
+    "each one says outright which phase it belongs to, rather than relying on " +
+    "its name -- renaming a column must not take its cards out of the phase");
+  assert.ok(installs.every((s) => s.isWorkPhase),
+    "all four are work phases, or a crew cannot claim or clock a job in them");
+
+  // One card in each of the four, none claimed, none on a station.
+  const cards = installs.map((s, i) => ({
+    id: "ic" + i, idList: s.listId, name: "Job #" + (2400 + i), pos: i + 1,
+    idLabels: [], labelNames: []
+  }));
+  assert.deepEqual(cards.map((c) => T.phaseOf(board, c)),
+    ["Install", "Install", "Install", "Install"]);
+
+  const truck = T.hydrate({ id: "i1", area: "install", table: "Truck 1",
+                            type: "install", welder: "" });
+  const st = T.stationState(board, cards, truck);
+  assert.deepEqual(st.queue.map((c) => c.name),
+    ["Job #2400", "Job #2401", "Job #2402", "Job #2403"],
+    "a crew sees all four columns, not the one it happens to sit in");
+
+  /* Install has no WFSteps entry, so there is no per-bench split inside the
+   * phase and every truck legitimately sees the same unclaimed work -- exactly
+   * as the four welding benches do. Claiming is what separates them. If Install
+   * ever gains steps, this is the line that will say so. */
+  assert.deepEqual(win.WFSteps.stepsFor("Install"), []);
+
+  /* Only ONE of the four is the move target, so a job finishing the shop lands
+   * in Central and the office sorts it onto a run. Without the tie-break every
+   * job went to whichever Install came first in the file. */
+  const primary = installs.filter((s) => s.isPrimaryTarget);
+  assert.equal(primary.length, 1, "exactly one Install column is the move target");
+  assert.equal(win.WFStage.getStageByName(boardId, "Install").listId, primary[0].listId);
+});
+
+test("install is a station area, or the gear cannot put a crew on one", () => {
+  /* `area` is a free-form string on a station and stationsFor() filters on it
+   * alone, so dropping "install" from AREAS breaks nothing the Install tab
+   * reads -- which is exactly why it needs a test of its own.
+   *
+   * What it breaks is the Floor's Stations dialog. That dialog builds its
+   * "Which screen" <select> from WFTables.areas() and writes the chosen value
+   * back with `r.s.area = r.area.value` on Save. With no install option, an
+   * install station's select has nothing selected, falls back to the first
+   * entry, and SAVING THE STATIONS DIALOG AT ALL silently moves every install
+   * crew onto the main shop screen -- where it pulls the Install phase on the
+   * shop TV and vanishes from the Install tab. */
+  assert.ok(T.areas().some((a) => a.id === "install"),
+    "the gear's screen picker offers Install, so an install station can be saved");
+  assert.equal(T.areaLabel("install"), "Install crews");
+  // areaLabel answers "Shop" for an id it does not know, which is the silent
+  // half of the same failure: a truck would label itself as being in the shop.
+  assert.equal(T.areaLabel("nosuchthing"), "Shop");
 });
 
 test("getBoardCardsFull hands back idLabels", () => {
@@ -2877,7 +2954,8 @@ test("CLAMP IS A NO-OP on every well-formed shape", () => {
     assert.equal(P.totalMinutes(work), Math.round(unclampedMs(work) / 60000),
       "totalMinutes moved on shape " + i);
     assert.equal(P.totalMinutes(work), T.elapsedMinutes(work),
-      "and WFTables.elapsedMinutes, which is NOT clamped, still agrees on shape " + i);
+      "and WFTables.elapsedMinutes, which now DELEGATES here, still agrees on " +
+      "shape " + i);
   });
 
   // The empty and absent cases, which costing hits constantly.
@@ -3026,4 +3104,430 @@ test("NaN: `release` keeps the record and says nothing about minutes", async () 
   assert.equal(comments.length, 1);
   assert.doesNotMatch(comments[0], /NaN/, "the card must never be shown the word NaN");
   assert.match(comments[0], /Progress so far stays on the job/);
+});
+
+/* ================= ONE SUM, THREE CALLERS: the drift that outlived the fix
+ *
+ * `WFPhase.elapsedMs` was clamped per segment because a shop tablet with a fast
+ * clock writes a `start` in the future, and unclamped that negative stretch
+ * cancels real hours -- which made `leavesNoTrace` say "nothing here" and
+ * DELETE a record with ninety minutes on it (see the SKEW tests above).
+ *
+ * The same arithmetic existed in two more private copies, and neither was
+ * clamped. So after the fix the SAME skewed job read +90 minutes on the Floor's
+ * release path and MINUS thirty in Records, and nothing anywhere said so. Three
+ * answers to one question is a worse exposure than the original bug, because it
+ * is the kind that gets argued about rather than found.
+ *
+ * `WFTables.elapsedMinutes` and records' `minutesOf` now both delegate to
+ * `WFPhase.elapsedMs`, with no local fallback at all. These tests hold the
+ * three to one answer, prove the clamp moved nothing honest, and pin what a
+ * surface loading either file without phase.js gets: a throw, not a number.
+ */
+
+/**
+ * `minutesOf` is module-private in lib/records.js, so it is reached the only
+ * way the product reaches it: through `openEntries`, its sole caller.
+ *
+ * Returns null where the row was DROPPED. That guard is the one that let the
+ * bug this file is about through: it was a single `if (!mins) return`, and a
+ * NEGATIVE is truthy, so minus thirty minutes sailed straight past it.
+ *
+ * IT IS TWO GUARDS NOW -- `isNaN` first, then `!mins && !pct` -- so a zero
+ * clock only drops when the phase ALSO has no progress on it. Every fixture
+ * below carries `percentComplete: 0` deliberately, which is what keeps "a
+ * zero reads as no row" true here. Put a percent on one and it becomes a row
+ * with zero minutes, which is the behaviour the live mirror now wants and
+ * would make this comparison meaningless.
+ */
+function recordsMinutes(w, work) {
+  const rows = w.WFRecords.openEntries([{
+    id: "c1", name: "WF-900 Handrail", idList: "L1",
+    phaseWork: Object.assign(
+      { listId: "L1", claimedBy: { username: "mike", fullName: "Mike Ross" } },
+      work || {})
+  }]);
+  return rows.length ? rows[0].minutes : null;
+}
+
+/**
+ * Run `fn` with `WFPhase.elapsedMs` swapped for the unclamped sum.
+ *
+ * That is EXACTLY what the two private copies computed before they delegated:
+ * `Math.round(unclampedMs(work) / 60000)`. So this reconstructs pre-delegation
+ * behaviour in both files at once, which is what makes the A/B below a real
+ * comparison rather than a restatement.
+ */
+function withPreDelegationArithmetic(w, fn) {
+  const real = w.WFPhase.elapsedMs;
+  w.WFPhase.elapsedMs = unclampedMs;
+  try { return fn(); } finally { w.WFPhase.elapsedMs = real; }
+}
+
+test("the three elapsed-time copies answer with one voice", () => {
+  const P = win.WFPhase;
+  const t0 = Date.parse("2020-06-01T07:00:00.000Z");
+  const iso = (ms) => new Date(ms).toISOString();
+
+  const shapes = [
+    { name: "normal: two closed segments, ninety minutes",
+      work: { percentComplete: 0, segments: [
+        { start: iso(t0), end: iso(t0 + 60 * MIN) },
+        { start: iso(t0 + 90 * MIN), end: iso(t0 + 120 * MIN) }] },
+      minutes: 90 },
+
+    { name: "skewed: a fast tablet's future `start` beside ninety real minutes",
+      work: skewedWork(), minutes: 90 },
+
+    { name: "end before start -- the plainest backwards segment",
+      work: { percentComplete: 0, segments: [
+        { start: iso(t0), end: iso(t0 - 60 * MIN) }] },
+      minutes: 0 },
+
+    { name: "empty: a manager assignment, no segments at all",
+      work: { percentComplete: 0, segments: [] }, minutes: 0 },
+
+    { name: "no work object at all",
+      work: null, minutes: 0 }
+  ];
+
+  shapes.forEach((s) => {
+    const canonical = Math.round(P.elapsedMs(s.work) / 60000);
+    assert.equal(canonical, s.minutes, "fixture: " + s.name);
+    assert.equal(T.elapsedMinutes(s.work), canonical,
+      "WFTables.elapsedMinutes drifted on " + s.name);
+    assert.equal(recordsMinutes(win, s.work), canonical || null,
+      "records' minutesOf drifted on " + s.name +
+      " (null where openEntries drops a zero row -- these fixtures are all " +
+      "at percentComplete: 0, so a zero clock has nothing holding it up)");
+  });
+
+  /* An OPEN segment cannot be compared byte for byte -- each caller asks
+   * `new Date()` for itself, a moment apart. Same number all the same. */
+  const open = { percentComplete: 0,
+    segments: [{ start: new Date(Date.now() - 95 * MIN).toISOString(), end: null }] };
+  assert.equal(P.totalMinutes(open), 95, "fixture: a running job an hour and a half in");
+  assert.equal(T.elapsedMinutes(open), 95, "the Floor's clock agrees");
+  assert.equal(recordsMinutes(win, open), 95, "and so does the Records mirror");
+
+  /* MALFORMED. `Math.max(0, NaN)` is NaN by design -- an unreadable clock must
+   * never launder into a measured zero, because a measured zero reads as
+   * "nobody worked" and that is what deletes records. All three carry the NaN
+   * rather than inventing a number; records' NaN guard then drops the row,
+   * so nothing is PRINTED either -- and unlike the zero case that guard is
+   * absolute, so a percent on this work would not buy it a row. See
+   * test/records.test.js' FALSY_ELAPSED table, which walks all six shapes. */
+  const bad = { percentComplete: 0, segments: [{ start: "not a date", end: null }] };
+  assert.ok(Number.isNaN(P.elapsedMs(bad)), "fixture: unmeasurable");
+  assert.ok(Number.isNaN(T.elapsedMinutes(bad)),
+    "tables must not launder NaN into a confident 0");
+  assert.equal(recordsMinutes(win, bad), null,
+    "and records shows no row rather than a row reading NaN");
+});
+
+test("a surface loading these files without phase.js fails loudly, not plausibly", () => {
+  /* THERE IS NO FALLBACK ANY MORE, AND THIS IS THE TEST THAT SAYS SO.
+   *
+   * Both functions used to guard with `if (global.WFPhase && ...)` and keep a
+   * clamped private copy behind it. The guard is gone: a clamped duplicate is
+   * still a duplicate, and the next change to elapsedMs would silently not
+   * apply to it -- which is exactly how the three copies drifted apart the
+   * first time.
+   *
+   * So the contract flipped. Where the fallback had to agree, the hard
+   * dependency has to THROW, because the alternative is a load-order mistake
+   * that ships as a plausible wrong number on a bench chip. ops.html is the
+   * only surface loading either file and it loads phase.js eleven tags
+   * earlier; index.html and popups/card-back.html load neither.
+   *
+   * Held rather than deleted because "it throws" is the whole argument for
+   * removing the fallback, and an argument nothing executes is an argument
+   * that quietly stops being true the first time somebody adds a guard back. */
+  const t0 = Date.parse("2020-06-01T07:00:00.000Z");
+  const iso = (ms) => new Date(ms).toISOString();
+  const cases = [
+    { percentComplete: 0, segments: [{ start: iso(t0), end: iso(t0 + 90 * MIN) }] },
+    skewedWork(),
+    { percentComplete: 0, segments: [{ start: iso(t0), end: iso(t0 - 60 * MIN) }] },
+    { percentComplete: 0, segments: [] },
+    null
+  ];
+
+  const real = win.WFPhase;
+  try {
+    win.WFPhase = undefined;      // the realm a surface without phase.js has
+    cases.forEach((work, i) => {
+      assert.throws(() => T.elapsedMinutes(work), /WFPhase|undefined/,
+        "tables.js must fail loudly rather than answer, case " + i);
+      assert.throws(() => recordsMinutes(win, work), /WFPhase|undefined/,
+        "records.js must fail loudly rather than answer, case " + i);
+    });
+    // Still worth stating: unclamped, the skewed case is MINUS thirty. That is
+    // the number a re-added fallback would have to get right, and the reason
+    // one answer beats two agreeing ones.
+    assert.equal(Math.round(unclampedMs(skewedWork()) / 60000), -30,
+      "fixture has teeth: unclamped, this job is minus thirty minutes");
+  } finally {
+    win.WFPhase = real;
+  }
+  assert.equal(T.elapsedMinutes(skewedWork()), 90, "restored, and still 90");
+  assert.equal(T.elapsedMinutes(null), 0, "and the empty guard still holds");
+});
+
+/* ============ the reviewer's claim: a negative must reach no Records figure */
+
+const SKEWED_WORKER = { id: "k", username: "kevinmoss", fullName: "Kevin Moss" };
+const MIKE_R = { id: "w", username: "mike", fullName: "Mike Ross" };
+const DALE_R = { id: "d", username: "dale", fullName: "Dale Prior" };
+const BOSS_R = { id: "s", username: "scottv", fullName: "Scott VanWorkom" };
+
+/**
+ * A board with real finished work plus ONE ongoing job a fast tablet touched.
+ *
+ * The skewed card carries a value and a worker who appears nowhere else, so an
+ * escaped negative would be visible in byJob, byPerson, byPhase and both ratios
+ * rather than hidden inside somebody's real hours.
+ */
+function skewBoard() {
+  const day = (n) => new Date(Date.now() - n * 24 * 3600000).toISOString();
+  return [
+    { id: "j1", name: "WF-101 Stair stringer", idList: "L1",
+      economics: { value: 12000 },
+      phaseLog: [
+        { listId: "L1", listName: "CAD", claimedBy: MIKE_R,
+          durationMinutes: 180, completedAt: day(3), approvedBy: BOSS_R },
+        { listId: "L2", listName: "Assemble", claimedBy: DALE_R,
+          durationMinutes: 420, completedAt: day(2), approvedBy: BOSS_R }] },
+    { id: "j2", name: "WF-102 Mezzanine rail", idList: "L2",
+      economics: { value: 6000 },
+      phaseLog: [
+        { listId: "L2", listName: "Assemble", claimedBy: DALE_R,
+          durationMinutes: 300, completedAt: day(1), approvedBy: BOSS_R }] },
+    // The skewed one: ongoing, on its own list, nobody else's hours on it.
+    { id: "j3", name: "WF-103 Gate", idList: "L3",
+      economics: { value: 8000 },
+      phaseWork: Object.assign(
+        { listId: "L3", claimedBy: SKEWED_WORKER }, skewedWork()) }
+  ];
+}
+
+test("a skewed ongoing job puts no negative into any Records figure", () => {
+  const R = win.WFRecords;
+  const cards = skewBoard();
+
+  /* THE SHIPPED PATH FIRST. popups/tabs/records.js renders open entries in
+   * their own "Running right now" panel, so this row IS what the shop sees. */
+  const open = R.openEntries(cards);
+  assert.equal(open.length, 1, "the skewed job is still shown, not dropped");
+  assert.equal(open[0].minutes, 90,
+    "THE DEFECT: this was -30, and `if (!mins)` let it through because a " +
+    "negative is truthy");
+  assert.equal(open[0].hours, 1.5);
+
+  /* AND THE WHOLE PIPELINE. timeSummary accepts open entries -- it is a public
+   * function taking a public list -- so this guards the composition the library
+   * permits, not only the one the tab currently wires. (Today the tab summarises
+   * finished entries alone; the live-work mirror on the backlog would change
+   * that, and this is the test that stops it reintroducing the bug.) */
+  const entries = R.timeEntries(cards).concat(open);
+  const s = R.timeSummary(entries, { minJobs: 1 });
+
+  assert.ok(s.minutes > 0 && s.hours > 0, "totals stay positive");
+  ["byJob", "byPerson", "byPhase"].forEach((map) => {
+    Object.keys(s[map]).forEach((k) => {
+      assert.ok(s[map][k].minutes >= 0,
+        "NEGATIVE in " + map + "[" + k + "]: " + s[map][k].minutes);
+      assert.ok(s[map][k].hours >= 0,
+        "NEGATIVE hours in " + map + "[" + k + "]");
+      assert.ok(!Number.isNaN(s[map][k].minutes), "NaN in " + map + "[" + k + "]");
+    });
+  });
+  assert.equal(s.byJob["WF-103 Gate"].minutes, 90, "the skewed job's own bucket");
+  assert.equal(s.byPerson["Kevin Moss"].minutes, 90, "and the name it lands on");
+  assert.ok(s.hoursPerThousand > 0, "hours per $1,000 stays positive");
+  assert.ok(s.revenuePerHour > 0, "and so does revenue per hour");
+
+  /* The ratios, isolated. With the skewed job as the ONLY priced job, a
+   * negative cannot hide inside a median of three. */
+  const solo = R.timeSummary(R.openEntries([cards[2]]), { minJobs: 1 });
+  assert.ok(solo.hoursPerThousand > 0, "solo hours per $1,000");
+  assert.ok(solo.revenuePerHour > 0, "solo revenue per hour");
+
+  /* ===== and the fixture must FAIL without the delegation, or it proves nothing
+   *
+   * Swapping elapsedMs for the unclamped sum is precisely the arithmetic
+   * records.js carried privately before this change. */
+  withPreDelegationArithmetic(win, () => {
+    const bad = R.openEntries(cards);
+    assert.equal(bad[0].minutes, -30,
+      "fixture has teeth: unclamped, this ongoing job is MINUS thirty minutes");
+    assert.equal(bad[0].hours, -0.5);
+
+    const sb = R.timeSummary(R.timeEntries(cards).concat(bad), { minJobs: 1 });
+    assert.ok(sb.byJob["WF-103 Gate"].minutes < 0, "byJob carried the negative");
+    assert.ok(sb.byPerson["Kevin Moss"].minutes < 0, "byPerson carried it");
+    assert.ok(sb.byPhase["unrecorded"].minutes < 0,
+      "byPhase carried it -- an open phase has no listName, so it buckets here");
+
+    const soloBad = R.timeSummary(R.openEntries([cards[2]]), { minJobs: 1 });
+    assert.ok(soloBad.hoursPerThousand < 0, "hoursPerThousand went negative");
+    assert.ok(soloBad.revenuePerHour < 0, "revenuePerHour went negative");
+  });
+});
+
+/* ====================== did the clamp move an HONEST figure? A/B, every output
+ *
+ * This is the thing that would make the change net-negative. On well-formed
+ * data `Math.max(0, x)` is `x`, so every number must be IDENTICAL -- not close.
+ * The comparison is run against the pre-delegation arithmetic itself rather
+ * than against hard-coded expectations, so it cannot pass by agreeing with a
+ * figure somebody typed.
+ */
+test("A/B: the delegation moved no honest figure in Records or on the Floor", () => {
+  const R = win.WFRecords;
+  const t0 = Date.parse("2026-03-02T07:00:00.000Z");
+  const iso = (ms) => new Date(ms).toISOString();
+  const day = (n) => new Date(Date.parse("2026-03-10T12:00:00.000Z") - n * 24 * 3600000).toISOString();
+  /* CLOSED segments throughout. An open one re-reads `new Date()` on each pass
+   * and a rounding boundary would make this flake for a reason that is not the
+   * clamp. A paused job is ongoing with every segment closed, which is both
+   * realistic and deterministic. */
+  const seg = (from, to) => ({ start: iso(t0 + from), end: iso(t0 + to) });
+
+  const cards = [
+    { id: "a1", name: "WF-201 Stair stringer", idList: "L1",
+      economics: { value: 14500 },
+      phaseLog: [
+        { listId: "L1", listName: "CAD", claimedBy: MIKE_R,
+          durationMinutes: 195, completedAt: day(6), approvedBy: BOSS_R },
+        { listId: "L2", listName: "Assemble", claimedBy: DALE_R,
+          durationMinutes: 465, completedAt: day(4), approvedBy: BOSS_R,
+          byPerson: { mike: 140, dale: 325 } },
+        { listId: "L3", listName: "Sandblast / Powder Coat", claimedBy: DALE_R,
+          step: "Sandblast", durationMinutes: 55, completedAt: day(3), approvedBy: BOSS_R }],
+      phaseWork: Object.assign({ listId: "L1", claimedBy: MIKE_R, percentComplete: 30 },
+        { segments: [seg(0, 37 * MIN), seg(50 * MIN, 50 * MIN + 29999)] }) },
+
+    { id: "a2", name: "WF-202 Mezzanine rail", idList: "L2",
+      economics: { value: 7250 },
+      phaseLog: [
+        { listId: "L1", listName: "CAD", claimedBy: SKEWED_WORKER,
+          durationMinutes: 90, completedAt: day(5), approvedBy: BOSS_R },
+        { listId: "L2", listName: "Assemble", claimedBy: SKEWED_WORKER,
+          durationMinutes: 612, completedAt: day(2), approvedBy: BOSS_R }],
+      phaseWork: { listId: "L2", claimedBy: SKEWED_WORKER, percentComplete: 65,
+        segments: [seg(0, 8 * 3600000), seg(9 * 3600000, 16 * 3600000),
+                   seg(20 * 3600000, 20 * 3600000 + 30001)] } },
+
+    { id: "a3", name: "WF-203 Gate, no price yet", idList: "L3",
+      phaseLog: [
+        { listId: "L3", listName: "Sandblast / Powder Coat", claimedBy: DALE_R,
+          step: "Powder", durationMinutes: 48, completedAt: day(1), approvedBy: BOSS_R }],
+      phaseWork: { listId: "L3", claimedBy: DALE_R, percentComplete: 10,
+        segments: [seg(0, 1), seg(10, 11), seg(20, 59999)] } },
+
+    // A manager assignment nobody has started, and a card with no phase work.
+    { id: "a4", name: "WF-204 Bollards", idList: "L1", economics: { value: 3100 },
+      phaseWork: { listId: "L1", claimedBy: DALE_R, percentComplete: 0, segments: [] } },
+    { id: "a5", name: "WF-205 Ladder", idList: "L1", economics: { value: 2400 } }
+  ];
+
+  function snapshot() {
+    const finished = R.timeEntries(cards);
+    const open = R.openEntries(cards);
+    const all = finished.concat(open);
+    const s = R.timeSummary(all, { minJobs: 1 });
+    return {
+      timeEntries: finished,
+      openEntries: open,
+      timeSummary: s,
+      byJob: R.sortedGroups(s.byJob),
+      byPerson: R.sortedGroups(s.byPerson),
+      byPhase: R.sortedGroups(s.byPhase),
+      hoursPerThousand: s.hoursPerThousand,
+      revenuePerHour: s.revenuePerHour,
+      toCSV: R.toCSV(all),
+      // Finished-only, the way the tab actually calls it today.
+      toCSVFinished: R.toCSV(finished),
+      summaryFinished: R.timeSummary(R.since(finished, 7), { minJobs: 1 }),
+      // The Floor: the clock chip on every bench, and the raw minutes behind it.
+      floorMinutes: cards.map((c) => T.elapsedMinutes(c.phaseWork)),
+      floorClock: cards.map((c) => T.clockText(T.elapsedMinutes(c.phaseWork)))
+    };
+  }
+
+  const after = snapshot();                                  // what ships
+  const before = withPreDelegationArithmetic(win, snapshot); // the old copies, exactly
+
+  Object.keys(after).forEach((k) => {
+    assert.deepStrictEqual(plain(after[k]), plain(before[k]),
+      "FIGURE MOVED: " + k + " differs from the pre-delegation arithmetic");
+  });
+
+  // And the fixture has to be worth A/B-ing: real hours, real ratios, real rows.
+  assert.ok(after.timeEntries.length >= 6, "fixture: several finished phases");
+  assert.ok(after.openEntries.length >= 3, "fixture: several jobs mid-flight");
+  assert.ok(after.timeSummary.hours > 30, "fixture: real hours on the board");
+  assert.ok(after.hoursPerThousand > 0 && after.revenuePerHour > 0,
+    "fixture: both ratios actually computed");
+  assert.ok(after.toCSV.split("\n").length > 6, "fixture: the export has rows");
+  assert.deepStrictEqual(after.floorMinutes.slice(0, 3), [37, 901, 1],
+    "fixture: the bench clocks sit ON the rounding boundaries -- 37.4999 rounds " +
+    "down, 900.5000 rounds up, 0.9997 rounds up. If the clamp had altered the " +
+    "arithmetic by a single millisecond these three are where it would show.");
+  assert.deepStrictEqual(after.floorClock.slice(0, 3), ["0:37", "15:01", "0:01"],
+    "and the chip the bench reads says the same");
+});
+
+/* ============================= the frozen log: nothing about it may have moved
+ *
+ * `phaseLog.durationMinutes` is written once and read forever by lib/costing.js
+ * and the Records tab. If this change had reached it, every historical cost in
+ * the shop would be a different number from the one it was signed off as.
+ */
+test("the frozen log still freezes totalMinutes, and nothing else", async () => {
+  const src = code("lib/phase.js");
+
+  assert.equal((src.match(/durationMinutes:\s*totalMinutes\(work\)/g) || []).length, 2,
+    "advance() and logPhase() are the two writers, and both must freeze " +
+    "totalMinutes(work) -- not elapsedMinutes, not minutesOf");
+  assert.ok(
+    /function totalMinutes\(work\)\s*\{\s*return Math\.round\(elapsedMs\(work\)\s*\/\s*60000\);\s*\}/.test(src),
+    "and totalMinutes must still be the rounded elapsedMs");
+  assert.ok(!/WFTables|WFRecords/.test(src),
+    "phase.js must not reach back into either caller -- the dependency runs one way");
+  assert.ok(/totalMinutes\(work\)/.test(code("lib/phase.js")),
+    "sanity: the call survives comment-stripping");
+
+  // And through the real write path, byte-identical to the pre-clamp sum.
+  const { w, t, meta, store } = releaseEnv(137);
+  store["c1/phaseWork"].completedAt = new Date().toISOString();
+  const frozen = w.WFPhase.totalMinutes(store["c1/phaseWork"]);
+  const unclamped = Math.round(unclampedMs(store["c1/phaseWork"]) / 60000);
+
+  const { logEntry } = await w.WFPhase.advance(t, meta, GIVER, { verb: "Completed" });
+  assert.equal(logEntry.durationMinutes, 137, "the honest figure, to the minute");
+  assert.equal(logEntry.durationMinutes, frozen, "which is totalMinutes");
+  assert.equal(logEntry.durationMinutes, unclamped, "byte-identical to pre-clamp");
+
+  const log = store["c1/phaseLog"];
+  assert.equal(log[log.length - 1].durationMinutes, 137,
+    "and that is what landed in the log the shop costs from");
+
+  /* The export column that reads it. timeEntries takes durationMinutes
+   * straight off the log and never calls the elapsed arithmetic at all, so a
+   * frozen entry is immune to this change by construction -- pinned, because
+   * "immune by construction" is exactly what stops being true quietly. */
+  const csv = win.WFRecords.toCSV(win.WFRecords.timeEntries([{
+    id: "f1", name: "WF-300 Frame", idList: "L1", economics: { value: 10000 },
+    phaseLog: [log[log.length - 1]]
+  }]));
+  const head = csv.split("\n")[0];
+  assert.equal(head,
+    'Job,Job number,Phase,Who,Approved by,Minutes,Hours,Completed,Job value,' +
+    '"Hours per $1,000",Shared phase',
+    "the export columns have not moved (the ratio header is quoted because it " +
+    "contains a comma -- csvCell's doing, and unchanged)");
+  assert.match(csv.split("\n")[1], /,137,2\.28,/,
+    "and the frozen 137 minutes export as 137 / 2.28 h");
 });

@@ -240,17 +240,36 @@ const ONE_STATION = {
 test("the defaults describe the shop, not the board", () => {
   const { T } = boot();
   const d = T.defaults().map(T.hydrate);
-  /* Seven, not nine. The cure oven and the wet paint bay were invented in the
+  /* Nine: seven in the building and two trucks.
+   *
+   * NOT the cure oven and the wet paint bay. Those two were invented in the
    * defaults and neither exists in the shop -- the oven is time the powder
    * operator owns rather than a bench anybody stands at, and there is no wet
    * paint bay at all. A station nobody works at still takes a column on the
    * shop TV and still asks to be staffed, so they are gone rather than hidden.
    * test/regressions.test.js holds the other half: that a saved config naming
-   * them cannot put them back. */
+   * them cannot put them back.
+   *
+   * The two trucks are the opposite case and are here on purpose: without at
+   * least one install station the Install tab opens on its empty state, and a
+   * tab that ships showing nothing reads as broken rather than unconfigured.
+   * Two is a guess at the fleet, renamed and added to in the gear. This list is
+   * what stops that guess being deleted by accident -- DEFAULTS seeds a real
+   * board, so a station leaving it is a decision, not a tidy-up. */
   assert.deepEqual(d.map((s) => s.table), [
     "Station #1", "Station #2", "Station #3", "Station #4", "CAP rail bench",
-    "Blast booth", "Powder booth"
+    "Blast booth", "Powder booth", "Truck 1", "Truck 2"
   ]);
+
+  /* The install crews, pinned field by field. `area` is what puts them on the
+   * Install tab rather than the floor TV, and `phase` is what gives them a
+   * queue at all -- a truck pointed at no phase renders "no phase set" and
+   * every install on the board stays invisible to every crew. */
+  const trucks = d.filter((s) => s.area === "install");
+  assert.deepEqual(trucks.map((s) => s.id), ["i1", "i2"]);
+  assert.ok(trucks.every((s) => s.type === "install"), "both are install crews");
+  assert.ok(trucks.every((s) => s.phase === "Install"),
+    "and both pull the Install phase, which is all four Install columns");
 
   // THE BUG THIS TEST EXISTS FOR. The first cut gave each welding bench a
   // different phase, so only Station #1 ever had a queue. Four welding benches
@@ -301,13 +320,57 @@ test("a new shipped station appears, and a deleted one stays deleted", () => {
   const { T } = boot();
   // These two rules pull in opposite directions and both matter.
   const grown = T.merge({ stations: [{ id: "s1", table: "Big table" }], visible: ["s1"] });
-  assert.equal(grown.stations.length, 7, "the others survive");
+  assert.equal(grown.stations.length, 9, "the others survive");
 
   const pruned = T.merge({ stations: [], visible: [], removed: ["s4"] });
-  assert.equal(pruned.stations.length, 6);
+  assert.equal(pruned.stations.length, 8);
   assert.ok(!pruned.stations.some((s) => s.id === "s4"),
     "a station somebody deleted does not walk back in on the next load");
   assert.deepEqual(pruned.removed, ["s4"]);
+});
+
+test("a newly shipped station arrives switched OFF on a board that saved a config", () => {
+  /* THE HALF OF "A NEW SHIPPED STATION APPEARS" THAT IS NOT TRUE, AND IT IS THE
+   * HALF THAT DECIDES WHAT THE SHOP SEES TOMORROW.
+   *
+   * `stations` is rebuilt from the shipped defaults every load, so a station
+   * added in a release really is in the list on a board that saved its config
+   * months ago. `visible` is not: merge() takes the SAVED visible array and
+   * filters it down to ids it recognises, and a saved array cannot name an id
+   * that did not exist when it was written. So the new station lands in the
+   * config switched off.
+   *
+   * Everything that renders goes through stationsFor(), which requires the tick.
+   * The practical effect is that adding a station to DEFAULTS ships it to new
+   * boards and to nobody else: on a live board it shows in the gear with its
+   * box unticked, and the screen it belongs to stays exactly as empty as it
+   * was. That is recoverable in one dialog, but it is NOT "it appears", and
+   * reading merge() alone says the opposite. */
+  const { T } = boot();
+  const saved = {
+    stations: [{ id: "s1", area: "shop", table: "Station #1", type: "weld", welder: "kevinmoss" }],
+    visible: ["s1"],
+    removed: []
+  };
+  const cfg = T.merge(saved);
+
+  assert.ok(cfg.stations.some((s) => s.id === "i1"), "it is in the config");
+  assert.ok(!cfg.visible.includes("i1"), "but it is not ticked");
+  assert.deepEqual(T.stationsFor(cfg, "install"), [],
+    "so the Install tab is still empty on a board that has saved its stations");
+
+  // A board that has never saved anything gets them, which is the only place
+  // seeding DEFAULTS actually lands.
+  assert.deepEqual(T.stationsFor(T.merge(null), "install").map((s) => s.table),
+    ["Truck 1", "Truck 2"]);
+
+  // And the recovery path exists: the gear lists every station in `stations`,
+  // not just the visible ones, so ticking it is all it takes.
+  const ticked = T.merge({
+    stations: saved.stations, visible: ["s1", "i1", "i2"], removed: []
+  });
+  assert.deepEqual(T.stationsFor(ticked, "install").map((s) => s.table),
+    ["Truck 1", "Truck 2"]);
 });
 
 test("a station this shop added itself survives a merge", () => {
@@ -708,6 +771,87 @@ test("switching areas keeps you there, and the finishing bay reads its own stati
   // Two benches, not four: the finishing bay is blast then powder, and both of
   // them pull the one "Sandblast / Powder Coat" column.
   assert.deepEqual(names, ["Blast booth", "Powder booth"]);
+
+  // And back again, because the pill you came in by has to still be there.
+  const shop = $(view, ".wf-fl-tab").find((b) => /Main shop/.test(textOf(b)));
+  assert.ok(shop, "no way back to the main shop");
+  shop.dispatchEvent(new env.win.Event("click"));
+  const back = env.win.document.getElementById("view");
+  assert.match(textOf(back.querySelector(".wf-fl-area")), /Main shop/);
+  assert.deepEqual($(back, ".wf-fl-name").map(textOf),
+    ["Station #1", "Station #2", "Station #3", "Station #4", "CAP rail bench"]);
+});
+
+/* ===================================================== install has no wall screen
+ *
+ * Install crews read their work off a tablet in a truck, which is the whole
+ * reason the Install tab exists rather than a third column set on the shop TV.
+ * So the Floor offers no pill for it -- and that is a FILTER IN THE TOP BAR, not
+ * a removal from WFTables.areas(). The two halves are tested together on
+ * purpose, because fixing either one by deleting the other is the obvious wrong
+ * move and both wrong moves are silent.
+ */
+
+test("the wall screen offers shop and finishing, and no pill for install", async () => {
+  const env = boot({ role: "worker", cards: [] });
+  const node = await render(env, 1920);
+
+  assert.deepEqual($(node, ".wf-fl-tab").map(textOf), ["Main shop", "Finishing bay"],
+    "the wall TV is offering a view of work nobody standing in front of it is doing");
+
+  // The area itself is still there, or the gear below cannot save a truck.
+  assert.ok(env.T.areas().some((a) => a.id === "install"));
+  assert.equal(env.T.areaLabel("install"), "Install crews");
+});
+
+test("the gear's \"Which screen\" picker still offers Install crews", async () => {
+  /* THE TRAP THIS EXISTS FOR. The Stations dialog builds its screen <select>
+   * from WFTables.areas() and writes the chosen value straight back with
+   * `r.s.area = r.area.value` on Save. Drop "install" from AREAS to take the
+   * pill off the wall and an install station's select has nothing selected,
+   * falls back to the first entry -- "Main shop" -- and merely PRESSING SAVE
+   * moves every truck onto the shop TV, where it pulls the Install phase in
+   * front of the welders and disappears out of the Install tab. */
+  const env = boot({ role: "manager", cards: [] });
+  const node = await render(env, 1280);
+  gear(node, "Station setup").dispatchEvent(new env.win.Event("click"));
+  await new Promise((r) => setTimeout(r, 0));
+
+  const doc = env.win.document;
+  const screens = $(doc, "select")
+    .filter((s) => $(s, "option").some((o) => textOf(o) === "Main shop"));
+  assert.ok(screens.length, "no screen picker in the Stations dialog at all");
+  screens.forEach((sel) => {
+    assert.ok($(sel, "option").some((o) => textOf(o) === "Install crews"),
+      "a truck's screen picker cannot say Install, so Save would move it to the shop");
+  });
+
+  // Truck 1 is an install station in the shipped defaults, and its own row has
+  // to come up already pointing at Install crews rather than at nothing.
+  const truckRow = screens.find((sel) => sel.value === "install");
+  assert.ok(truckRow, "no station is set to the install screen, so nothing is proved");
+});
+
+test("the Floor can never be left on an area it cannot leave", () => {
+  /* state.area starts at "shop" and the ONLY thing that writes it is the pill
+   * loop in topBar(), which is built from the filtered list -- so "install" is
+   * not reachable and the Floor cannot end up rendering an area with no pill to
+   * get out of. It is not persisted and not read from the URL (the pin is the
+   * only thing in this file that is either), so there is no back door.
+   *
+   * Asserted on the source because the claim is "there is no other writer", and
+   * that is a statement about the file rather than about one render. A second
+   * assignment -- a saved area, a ?area= param, a deep link from another tab --
+   * has to come with its own answer to "and how do you get back", which is what
+   * this failing is asking its author for. */
+  const src = read("popups/tabs/floor.js");
+  const writes = src.match(/state\.area\s*=/g) || [];
+  assert.equal(writes.length, 1,
+    "something else now sets state.area -- make sure the area it can set has a pill");
+  assert.match(src, /WFTables\.areas\(\)\s*\.filter\([\s\S]{0,120}?a\.id\s*!==\s*"install"/,
+    "the top bar no longer filters install out of the area pills");
+  assert.ok(!/(localStorage|t\.get)[\s\S]{0,80}area/i.test(src),
+    "the area is being persisted, so a tablet could come back pinned to one with no pill");
 });
 
 test("saving stations writes config and nothing else", async () => {

@@ -115,10 +115,41 @@ describe("every route step exists on the board", () => {
     }
   });
 
-  test("every route starts before CAD and ends at Install", () => {
+  /* ENDS AT BILLING, NOT AT INSTALL, AND THAT CHANGE IS A BUG FIX.
+   *
+   * This test used to read "ends at Install", which pinned the defect rather
+   * than the rule. Install as a terminus meant nextPhase() answered null there,
+   * `advance` took its `if (next)` branch, logged the hours, removed phaseWork,
+   * commented "No next stage configured -- card left in place" and left the
+   * card in an Install list. With its phase work gone the card read as
+   * unclaimed work in the Install phase, so WFTables.stationState dropped it
+   * back into the `loose` bucket of EVERY truck's queue (lib/tables.js) and it
+   * stayed there until the office dragged it out by hand.
+   *
+   * config.js has always had Billing at order 12 straight after Install's 11.
+   * The route table was the only thing that disagreed, so the assertion that
+   * described the disagreement is the one that had to go.
+   */
+  test("every route starts before CAD and ends at Billing, one step past Install", () => {
     for (const t of routed) {
-      assert.equal(t.route[t.route.length - 1], "Install", t.key + " does not end at Install");
+      assert.equal(t.route[t.route.length - 1], "Billing", t.key + " does not end at Billing");
+      assert.equal(t.route[t.route.length - 2], "Install",
+        t.key + " does not reach Billing straight out of Install");
       assert.ok(t.route.includes("CAD"), t.key + " skips CAD");
+    }
+  });
+
+  /* Billing is the end of the road and nothing beyond it is routed to.
+   *
+   * Outstanding Invoices is order 13 and Job Closed / Done is 14, and both are
+   * office work somebody picks up by hand. A route that reached either would
+   * mean the Power-Up auto-invoicing and auto-closing jobs off a shop tablet. */
+  test("no route reaches past Billing into the office's own columns", () => {
+    for (const t of routed) {
+      for (const office of ["Outstanding Invoices", "Job Closed / Done", "Lost Bids"]) {
+        assert.ok(!t.route.includes(office),
+          t.key + " routes into " + office + ", which the office owns by hand");
+      }
     }
   });
 });
@@ -126,7 +157,9 @@ describe("every route step exists on the board", () => {
 describe("the individual routes", () => {
   test("CNC-only cuts and builds in Assemble CNC, with no separate cutting stage", () => {
     const r = WFJobType.byKey("cnc_only").route;
-    assert.deepEqual(h.plain(r), ["CAD", "Assemble CNC", "Install"]);
+    // Billing on the end, same as every other route -- see "ends at Billing"
+    // above for why Install is not a terminus.
+    assert.deepEqual(h.plain(r), ["CAD", "Assemble CNC", "Install", "Billing"]);
     assert.deepEqual(h.plain(WFJobType.byKey("cnc_only").optional), ["Sandblast / Powder Coat"]);
   });
 
@@ -250,10 +283,28 @@ describe("walking a route with nextPhase", () => {
     }
   });
 
+  /* THE OLD VERSION OF THIS TEST ASSERTED THE BUG.
+   *
+   * It read `nextPhase(card, "Install") === null` for every route, i.e. "the
+   * route stops at Install" -- which is the terminus that stranded finished
+   * install jobs in an Install column with their phase work removed, where
+   * every truck's queue picked them up again as fresh unclaimed work. "The last
+   * step ends the route" is the real rule; "Install is the last step" was the
+   * defect. So the stop is now asserted at whatever each route's last element
+   * actually is, and Install is asserted to lead ON to Billing.
+   */
   test("the last step ends the route rather than looping", () => {
     for (const t of routed) {
-      assert.equal(WFJobType.nextPhase({ jobType: t.label }, "Install", shopOrder), null,
-        t.key + " does not stop at Install");
+      const last = t.route[t.route.length - 1];
+      assert.equal(WFJobType.nextPhase({ jobType: t.label }, last, shopOrder), null,
+        t.key + " does not stop at " + last);
+    }
+  });
+
+  test("Install leads on to Billing on every route, so no card is stranded there", () => {
+    for (const t of routed) {
+      assert.equal(WFJobType.nextPhase({ jobType: t.label }, "Install", shopOrder), "Billing",
+        t.key + " leaves a finished install card in the Install list");
     }
   });
 

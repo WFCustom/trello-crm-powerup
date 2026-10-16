@@ -553,7 +553,19 @@
     bar.appendChild(O.el("div.wf-fl-area", { text: WFTables.areaLabel(state.area) }));
 
     var tabs = O.el("div.wf-fl-tabs");
-    WFTables.areas().forEach(function (a) {
+    /* INSTALL IS AN AREA WITHOUT A SCREEN, so it gets no pill here. Crews read
+     * their work off a tablet in a truck -- that is the whole reason the
+     * Install tab exists instead of a third column set on the shop TV, and
+     * putting "Install crews" on the wall display would offer the floor a view
+     * of work nobody standing in front of that TV is doing.
+     *
+     * The area itself has to stay in WFTables.areas(): the gear's "Which
+     * screen" select is built from the same list, and with no install option
+     * an install station's select falls back to the first entry, so merely
+     * pressing Save in the Stations dialog would silently move every truck
+     * onto the main shop screen. So it is filtered HERE, in the one place
+     * that paints a wall, rather than removed at the source. */
+    WFTables.areas().filter(function (a) { return a.id !== "install"; }).forEach(function (a) {
       tabs.appendChild(O.el("button.wf-fl-tab" + (a.id === state.area ? ".is-on" : ""), {
         type: "button", text: a.label,
         onClick: function () { state.area = a.id; paint(); }

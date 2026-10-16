@@ -49,7 +49,49 @@
       ".wf-rec-f input,.wf-rec-f textarea,.wf-rec-f select{font:inherit;font-size:14px;",
       "padding:9px 11px;border:1px solid var(--wf-line);border-radius:11px;background:#fff;",
       "color:var(--wf-text);width:100%}",
-      ".wf-rec-f textarea{resize:vertical;line-height:1.5}"
+      ".wf-rec-f textarea{resize:vertical;line-height:1.5}",
+
+      /* The live rows. Louder than the rest of this tab on purpose: everything
+         else here is read at a desk with a question in mind, and this one strip
+         is the only thing on the screen somebody might glance at from the other
+         side of the office to see whether the shop is moving. */
+      ".wf-rec-live{display:grid;grid-template-columns:116px minmax(0,1.6fr) minmax(0,1fr) auto;",
+      "gap:16px;align-items:center;padding:12px 15px;margin-bottom:8px;border-radius:13px;",
+      "background:#fff;border:1px solid var(--wf-line);border-left:6px solid var(--wf-line)}",
+      ".wf-rec-live.is-run{border-left-color:var(--wf-go);background:var(--wf-tint-go)}",
+      ".wf-rec-live.is-pause{border-left-color:var(--wf-amber);background:var(--wf-tint-amber)}",
+      ".wf-rec-live.is-done{border-left-color:var(--wf-steel);background:var(--wf-tint-steel)}",
+      /* Not started: progress on the slider, nothing on the clock. Deliberately
+         the quietest row on the strip -- it is here so the work is not
+         invisible, not because it wants attention. */
+      ".wf-rec-live.is-idle{border-left-color:var(--wf-steel)}",
+      ".wf-rec-state{display:flex;align-items:center;gap:8px;font-family:var(--wf-font-cond);",
+      "font-size:16px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}",
+      ".is-run .wf-rec-state{color:var(--wf-ink-go)}",
+      ".is-pause .wf-rec-state{color:var(--wf-ink-amber)}",
+      ".is-done .wf-rec-state{color:var(--wf-steel)}",
+      ".is-idle .wf-rec-state{color:var(--wf-steel)}",
+      /* COLOUR IS NOT THE ONLY DIFFERENCE, and that is deliberate: a colour-blind
+         reader, a sun-washed screen and a greyscale print all lose it. Running is
+         a round mark that breathes, paused is a square one that does not. */
+      ".wf-rec-state b{display:block;width:11px;height:11px;background:currentColor;",
+      "border-radius:50%}",
+      ".wf-rec-live.is-pause .wf-rec-state b{border-radius:2px}",
+      // Hollow, not filled: nothing has happened on this one yet.
+      ".wf-rec-live.is-idle .wf-rec-state b{border-radius:2px;background:none;",
+      "box-shadow:inset 0 0 0 2px currentColor}",
+      ".wf-rec-live.is-run .wf-rec-state b{animation:wf-rec-beat 1.6s ease-in-out infinite}",
+      "@keyframes wf-rec-beat{0%,100%{opacity:1}50%{opacity:.2}}",
+      ".wf-rec-pct{display:flex;align-items:center;gap:11px;font-weight:700;",
+      "font-variant-numeric:tabular-nums}",
+      ".wf-rec-pct .wf-rec-bar{flex:1;height:9px;background:#fff}",
+      ".is-run .wf-rec-bar i{background:var(--wf-go)}",
+      ".is-pause .wf-rec-bar i{background:var(--wf-amber)}",
+      ".is-done .wf-rec-bar i{background:var(--wf-steel)}",
+      ".is-idle .wf-rec-bar i{background:var(--wf-steel)}",
+      ".wf-rec-clock{font-family:var(--wf-font-cond);font-size:27px;font-weight:700;",
+      "font-variant-numeric:tabular-nums;color:var(--wf-navy);white-space:nowrap;line-height:1}",
+      ".wf-rec-h2{font-size:19px;font-weight:700}"
     ].join("");
     var tag = document.createElement("style");
     tag.id = "wf-rec-styles";
@@ -66,23 +108,202 @@
 
   function add(p, n) { if (n) p.appendChild(n); return p; }
 
+  /* ------------------------------------------------------------- the clock */
+
   /**
-   * Time and Quality name individuals and their hours; Safety and Training are
-   * everybody's. A worker who opens this tab gets the two that are theirs,
-   * rather than a tab that refuses to open.
+   * MAY THIS PERSON SEE A RUNNING CLOCK? Leadership, and nobody else.
+   *
+   * `see.timers` at scope "all" -- the grant that reads "every time log, not
+   * just the ones in your area" -- rather than a capability of its own. A
+   * second switch for the same question is a second switch to forget, and the
+   * thing being withheld here is not a new secret: lib/tables.js' elapsedMinutes
+   * explains why the shop floor never sees a ticking clock, and a worker who
+   * cannot see one at his bench must not be able to open Records and watch it
+   * there instead. Only the leadership preset ships with "all"; a shop or
+   * office manager holds "area", which gets them the archive and no clock.
+   *
+   * Fails closed, twice over. `scopeFor` is built by ops.js, which cannot
+   * construct a ctx without WFPerms, so its absence means we are somewhere that
+   * never granted anything -- and the safe answer there is no.
+   *
+   * The SECOND guard is not belt and braces. This used to be unreachable
+   * without WFPerms: the Time section carried `minScope`, `allowed()` refused
+   * it when the library was missing, and a function that never ran could
+   * dereference a global that was not there. Opening Time to everyone made
+   * `liveTracker` -- and therefore this -- run on every Time render, so a
+   * missing permissions.js stopped being a tightened gate and became a
+   * ReferenceError that refresh()'s catch turned into "Couldn't load the
+   * records" for the whole tab. Probe with `typeof`, which is the only form
+   * that cannot throw; see the same note in `allowed()`.
+   */
+  function maySeeClock(ctx) {
+    if (!ctx || typeof ctx.scopeFor !== "function") return false;
+    if (typeof WFPerms === "undefined" || !WFPerms || !WFPerms.atLeast) return false;
+    return WFPerms.atLeast(ctx.scopeFor("see.timers"), "all");
+  }
+
+  /**
+   * May this reader see the ARCHIVE half of Time -- everybody's hours, the
+   * two ratios, the export?
+   *
+   * "area", not "all". This is a different question from maySeeClock and
+   * deliberately a lower bar: a shop or office manager needs last month's
+   * numbers to plan with and does not need a clock ticking at a named
+   * welder. "own" is the grant a welder holds so he can read his own time at
+   * his own bench, and it has never meant he may read everyone's.
+   *
+   * Fails closed, same as maySeeClock and for the same reason: a ctx with no
+   * scopeFor is one that never granted anything.
+   */
+  function maySeeArchive(ctx) {
+    if (!ctx) return false;
+    if (typeof ctx.scopeFor === "function") {
+      if (typeof WFPerms === "undefined" || !WFPerms || !WFPerms.atLeast) return false;
+      return WFPerms.atLeast(ctx.scopeFor("see.timers"), "area");
+    }
+    /* Pre-capability ctx: answer with the same role list the Time section
+     * itself used before scopes existed. maySeeClock can hard-refuse here
+     * because a legacy ctx never promised a clock to anyone; this one cannot,
+     * because refusing would hide the archive from the very managers the old
+     * model let in -- the opposite of the leak this is closing. */
+    return ctx.role === "manager" || ctx.role === "office";
+  }
+
+  /**
+   * ONE interval for the whole tab, replaced rather than added to on each paint.
+   *
+   * There is no teardown hook on O.tab to hang this on -- ops.js' renderActive
+   * empties #view and builds the next tab's node, so a tab is never told it is
+   * leaving. What it IS told, implicitly, is that its host stopped being part
+   * of the document: the isConnected check below is the teardown, and it is the
+   * same one the Floor uses. Without it every visit to this tab would leave a
+   * second clock running against a detached row for the life of the window.
+   *
+   * If a real lifecycle hook ever lands, this is one of the three places that
+   * should stop guessing -- see popups/tabs/floor.js and popups/tabs/workboard.js.
+   */
+  var tick = null;
+
+  function stopTimers() {
+    if (tick) { clearInterval(tick); tick = null; }
+  }
+
+  /**
+   * One second, not the Floor's thirty: these read h:mm:ss, so every tick
+   * changes a character. The Floor's chips read h:mm and would be repainting
+   * the same text twenty-nine times out of thirty on a TV left on all day.
+   *
+   * The elapsed figure is re-read from the phase work rather than counted up
+   * from a number captured at paint time. Same answer for a running job, and
+   * for a PAUSED one it is the only right answer: elapsedMs stops where the
+   * last segment closed, so a paused clock stands still, which is the state
+   * showing itself.
+   */
+  function startClock() {
+    tick = setInterval(function () {
+      if (!state.host || !state.host.isConnected) { stopTimers(); return; }
+      Array.prototype.forEach.call(
+        state.host.querySelectorAll(".wf-rec-clock[data-card]"), function (node) {
+          var ms = elapsedOf(node.getAttribute("data-card"));
+          // A tablet with an unreadable clock gives NaN here. openEntries drops
+          // that row before it is ever painted, so this is belt and braces --
+          // but "NaN:NaN:NaN" in 27px type is not a thing to risk.
+          if (isFinite(ms)) node.textContent = O.clock(ms);
+        });
+    }, 1000);
+  }
+
+  /**
+   * Milliseconds on a card's clock, read fresh from the phase work.
+   *
+   * Through O.activeWork so phase work left behind by an EARLIER phase is
+   * ignored, which is the same rule lib/phase.js applies and the reason a
+   * card claimed and then moved does not keep ticking here.
+   */
+  function elapsedOf(cardId) {
+    var cards = state.cards || [];
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].id === cardId) {
+        var work = O.activeWork(cards[i]);
+        return work ? WFPhase.elapsedMs(work) : NaN;
+      }
+    }
+    return NaN;
+  }
+
+  /**
+   * Safety and Training are everybody's. Quality names individuals and their
+   * sign-offs. Time is TWO things with two different audiences, and that is
+   * why only one of them is gated here.
+   *
+   * THE GATE MOVED DOWN A LEVEL, ON PURPOSE. It was briefly on the Time
+   * section itself, with `minScope: "area"`, to close a real leak: `ctx.can`
+   * is true at ANY scope above none, every preset including `worker` holds
+   * see.timers at "own" so a welder can read his own clock, and the archive
+   * -- by-person hours for the whole shop, the ratios, the CSV export -- sat
+   * behind that bare check. Closing it at the section closed too much. The
+   * live mirror in the same section is the half the shop floor is shown
+   * anyway: state and percent, no clock. Gating the section took that away
+   * too and left a welder with a Records tab containing one pill reading
+   * "Training". So Time stays open to everyone and `doneTracker` carries the
+   * scope test instead -- see `maySeeArchive`.
+   *
+   * THE ROLE LIST WENT WITH THE minScope, and for the same reason. `roles` is
+   * how an unscoped section answers a pre-capability ctx, and `["manager",
+   * "office"]` was the OLD policy written out twice: refuse the whole of Time
+   * to a welder. Leaving it behind would have meant a legacy ctx still hiding
+   * the live mirror from the shop floor while a capability ctx showed it --
+   * the same question answered two different ways depending on which side of
+   * the permissions release you were on. Time now has no role list, so the
+   * legacy answer is yes and `maySeeArchive`'s own role list ("manager" or
+   * "office") is the only place the old distinction still lives: the archive.
    */
   var SECTIONS = [
-    { id: "time", label: "Time", cap: "see.timers", roles: ["manager", "office"] },
-    { id: "quality", label: "Quality", cap: "qc.sign", roles: ["manager", "office"] },
+    { id: "time", label: "Time", cap: "see.timers" },
+    // Quality is a straight section gate and stays one: qc.sign at "own"
+    // means a welder may sign his own work, which does not qualify him to
+    // read the shop's whole QC history. There is no floor-visible half here
+    // the way there is in Time.
+    { id: "quality", label: "Quality", cap: "qc.sign", minScope: "area", roles: ["manager", "office"] },
     { id: "safety", label: "Safety", cap: "safety.view" },
     { id: "training", label: "Training" }
   ];
 
   function allowed(ctx, s) {
-    // The board's own answer when there is one, the old fixed one otherwise.
-    // Safety is the case that makes this worth doing: everyone may FILE a
-    // report, and who may READ them is a decision this shop should own rather
-    // than inherit from a role name I chose.
+    /* A SCOPED SECTION IS ANSWERED BY THE SCOPE MODEL OR NOT AT ALL.
+     *
+     * `ctx.can` is true at ANY scope above none, which is precisely the grant
+     * `minScope` exists to refuse -- every preset including `worker` holds
+     * see.timers at "own". So `can` must never stand in as a fallback for a
+     * section that declares a minScope: that is not a degraded answer, it is
+     * the wrong one, and it fails OPEN on the exact path this guard was added
+     * to close. Each branch below therefore refuses rather than relaxes.
+     *
+     * There is no `global` in this file -- it is a bare IIFE, not one of the
+     * lib modules that takes `window` as a parameter -- so WFPerms is probed
+     * with `typeof`, which is the only form that cannot throw. Reaching for
+     * `global.WFPerms` here threw a ReferenceError on EVERY render, for
+     * everyone, and took the whole tab down with it.
+     */
+    if (s.cap && s.minScope) {
+      // In the capability world: ops.js hangs `can` and `scopeFor` together,
+      // so `scopeFor` present means the scope model is the question being
+      // asked. If WFPerms is missing we cannot compare two scopes, and the
+      // safe answer to a question we cannot evaluate is no.
+      if (typeof ctx.scopeFor === "function") {
+        if (typeof WFPerms === "undefined" || !WFPerms || !WFPerms.atLeast) return false;
+        return WFPerms.atLeast(ctx.scopeFor(s.cap), s.minScope);
+      }
+      // Pre-capability context -- no scopeFor, and therefore no `can` either.
+      // The role list is the only answer such a ctx can give, and a scoped
+      // section that names no roles gets refused rather than waved through.
+      return !!s.roles && s.roles.indexOf(ctx.role) !== -1;
+    }
+
+    // Unscoped sections keep the old order: the board's own answer when there
+    // is one, the fixed role list otherwise. Safety is the case that makes
+    // this worth doing -- everyone may FILE a report, and who may READ them is
+    // a decision this shop should own rather than inherit from a role name.
     if (s.cap && typeof ctx.can === "function") return ctx.can(s.cap);
     return !s.roles || s.roles.indexOf(ctx.role) !== -1;
   }
@@ -95,10 +316,15 @@
 
   function paint() {
     if (!state.host) return;
+    // Before the rows it ticks are thrown away, not after: a paint that left
+    // the old interval running would have it hunting for nodes that no longer
+    // exist, and the next paint would start a second one beside it.
+    stopTimers();
     state.host.innerHTML = "";
     add(state.host, header());
     add(state.host, rail());
     add(state.host, section());
+    if (state.host.querySelector(".wf-rec-clock")) startClock();
   }
 
   function refresh() {
@@ -191,18 +417,162 @@
 
   /* ------------------------------------------------------------------ time */
 
+  /**
+   * TWO TRACKERS, AND THEY ARE DELIBERATELY NOT THE SAME FURNITURE.
+   *
+   * Live work is a mirror of what the benches are doing this second: one row
+   * per phase, state and progress, nothing averaged and nothing totalled into
+   * the archive. Completed work is the archive: signed-off phases, a total,
+   * and the two ratios the shop is trying to learn.
+   *
+   * Keeping them apart is the same judgement `ongoing` encodes in the library,
+   * one level up. A half-finished phase counted as a build time makes the shop
+   * look slower than it is; a finished phase shown as live makes it look
+   * busier. Both were on this screen before -- the stats were right and the
+   * "Running right now" panel quietly listed completed phases that had not yet
+   * moved on, with the clock beside them still being read as a clock.
+   */
   function timeView() {
     var all = WFRecords.timeEntries(state.cards);
     var entries = WFRecords.since(all, state.days);
     var open = WFRecords.openEntries(state.cards);
+    var wrap = O.el("div");
+
+    wrap.appendChild(O.el("div.wf-pagehead", { style: "margin-bottom:14px" },
+      O.el("div.wf-h2.wf-rec-h2", { text: "Time worked" })));
+
+    wrap.appendChild(liveTracker(open.filter(function (e) { return !e.finished; })));
+
+    /* THE ARCHIVE IS THE GATED HALF, NOT THE SECTION. A welder reaches Time
+     * because he holds see.timers at "own" -- enough to watch the board move,
+     * which is what the live mirror above is and what the shop floor is shown
+     * anyway. It is not enough to read everybody's hours, the ratios and the
+     * CSV. That distinction used to live on the SECTIONS entry, where it cost
+     * the welder both halves; see the comment there. */
+    if (maySeeArchive(state.ctx)) {
+      wrap.appendChild(doneTracker(entries, open.filter(function (e) { return e.finished; })));
+    }
+    return wrap;
+  }
+
+  /**
+   * The live mirror: what has a timer on it right now, and how far along it is.
+   *
+   * No period picker, because "last 90 days" is not a question you can ask
+   * about now, and no total hours unless the reader may see a clock at all.
+   */
+  function liveTracker(rows) {
+    var showClock = maySeeClock(state.ctx);
+    /* THREE STATES IN THE SUBTITLE TOO. This used to read
+       `rows.length - running` paused, which was true while every row had a
+       clock on it. A percent-only row now reaches this list and has no clock,
+       so that arithmetic filed it under "paused" -- the panel heading saying
+       somebody walked away from a job whose own row, two inches below, reads
+       "Not started". Counted from the flags instead, so the two cannot drift. */
+    var running = rows.filter(function (e) { return e.running; }).length;
+    var paused = rows.filter(function (e) { return e.paused; }).length;
+    var idle = rows.length - running - paused;
+    var note = rows.length
+      ? [running + " running", paused + " paused"]
+          .concat(idle ? [idle + " not started"] : []).join(" · ")
+      : "nothing on a bench at the moment";
+
+    /* The one figure the live tracker totals, and it is made of clocks, so it
+       is gated exactly like the per-row ones. "So far" rather than "right now"
+       because a paused job's minutes are in it: the question this answers is
+       how much time is sunk into what is open, not how many timers are
+       turning. */
+    var total = (showClock && rows.length)
+      ? O.el("div", { style: "font-size:13px;color:var(--wf-muted)" },
+          O.el("span", { text: "on these jobs so far: " }),
+          O.el("b", { text: O.hours(rows.reduce(function (n, e) {
+            return n + e.minutes;
+          }, 0)) }))
+      : null;
+
+    var p = O.panel("Live work", note, total);
+    if (!rows.length) {
+      p.body(O.el("div.wf-rec-note", {
+        text: "No bench has anything open right now. A job appears here the " +
+              "moment somebody taps Start — or the moment a manager moves its " +
+              "slider — and stays while it is paused." }));
+      return p;
+    }
+    p.body(O.el("div", null, rows.map(function (e) { return liveRow(e, showClock); })));
+    return p;
+  }
+
+  /**
+   * One live job: what state it is in, who has it, how far along, how long.
+   *
+   * The state is said three ways -- a word, a colour and the shape of the mark
+   * beside it -- because this is the one strip on the tab somebody reads at a
+   * glance rather than studies, and a single cue is one bad monitor away from
+   * no cue at all.
+   */
+  function liveRow(e, showClock) {
+    /* THREE STATES, NOT TWO. A row with progress but no segments is neither:
+     * nobody has started the clock on it, so "Paused" would claim somebody
+     * walked away from work that has not begun. It reaches this list because
+     * a manager pushed its slider, and that is worth showing -- as what it
+     * is. See openEntries, which stopped conflating zero-clock with no-row. */
+    var kind = e.running ? "run" : e.paused ? "pause" : "idle";
+    var word = e.running ? "Running" : e.paused ? "Paused" : "Not started";
+    var row = O.el("div.wf-rec-live.is-" + kind, null,
+      O.el("div.wf-rec-state", null,
+        O.el("b"),
+        O.el("span", { text: word })),
+      O.el("div", null,
+        O.el("div.wf-job", { text: e.job }),
+        O.el("div.wf-jobsub", { text: e.who || "unclaimed" })),
+      progress(e.percent));
+
+    /* THE CLOCK IS THE ONLY THING WITHHELD. State and percent are on every
+     * row for everybody who can open this section at all -- they are what the
+     * shop floor is shown too, and they are the half of the mirror that is
+     * about the job rather than about the person holding it. */
+    if (showClock) {
+      row.appendChild(O.el("div.wf-rec-clock", {
+        // The exact elapsed, not `e.minutes * 60000`. The row's minutes are
+        // rounded, so painting from them and then letting the ticker correct
+        // it a second later makes the clock jump by up to half a minute the
+        // moment you look at it.
+        text: O.clock(elapsedOf(e.cardId)),
+        // Lets the ticker find this node again without repainting the panel,
+        // and tells it which card to re-read. Same trick as the Floor's chips.
+        "data-card": e.cardId
+      }));
+    }
+    return row;
+  }
+
+  /** The percent, as a number and a bar, coloured by the row's state. */
+  function progress(pct) {
+    var n = Math.max(0, Math.min(100, Math.round(pct || 0)));
+    return O.el("div.wf-rec-pct", null,
+      O.el("div.wf-rec-bar", null, O.el("i", { style: "width:" + n + "%" })),
+      O.el("span", { text: n + "%" }));
+  }
+
+  /**
+   * Completed work: signed-off phases, totalled.
+   *
+   * `settling` is the awkward third case -- phases marked complete whose cards
+   * have not moved on yet. They belong on this side of the line rather than in
+   * the live mirror (nobody is working them), but they are not in the total
+   * either, because the total counts phaseLog and they are not in it yet. Shown
+   * without any figure at all for that reason: an uncounted number printed next
+   * to a total is an invitation to add it on.
+   */
+  function doneTracker(entries, settling) {
     var s = WFRecords.timeSummary(entries);
     var wrap = O.el("div");
 
     var right = O.el("div", { style: "display:flex;gap:8px;align-items:center" },
       periodPicker(),
       O.btn("Export", { onClick: function () { openExport(entries); } }));
-    var head = O.el("div.wf-pagehead", { style: "margin-bottom:14px" },
-      O.el("div.wf-h2", { text: "Time worked", style: "font-size:19px;font-weight:700" }));
+    var head = O.el("div.wf-pagehead", { style: "margin:22px 0 14px" },
+      O.el("div.wf-h2.wf-rec-h2", { text: "Completed work" }));
     right.classList.add("wf-spacer");
     head.appendChild(right);
     wrap.appendChild(head);
@@ -212,6 +582,9 @@
         O.el("div", { text: "No finished phases recorded in this period." }),
         O.el("div.muted", { text: "A phase lands here once a manager approves it, " +
           "so the log fills up as work is signed off." })));
+      // Last, here as below: the totals are the headline of this half of the
+      // screen, and the settling rows are a footnote about what is not in them.
+      if (settling.length) wrap.appendChild(settlingPanel(settling));
       return wrap;
     }
 
@@ -245,19 +618,35 @@
     byPerson.body(table(WFRecords.sortedGroups(s.byPerson), s.hours));
     wrap.appendChild(O.el("div.wf-panels.split", null, byPhase, byPerson));
 
-    if (open.length) {
-      var running = O.panel("Running right now",
-        "not counted in anything above — a half-finished phase isn't a build time");
-      running.body(O.el("table.wf-rec-t", null,
-        O.el("tbody", null, open.map(function (e) {
-          return O.el("tr", null,
-            O.el("td", { text: e.job }),
-            O.el("td", { text: e.who || "unclaimed" }),
-            O.el("td.n", { text: O.hours(e.minutes) }));
-        }))));
-      wrap.appendChild(running);
-    }
+    if (settling.length) wrap.appendChild(settlingPanel(settling));
     return wrap;
+  }
+
+  /**
+   * Finished, but the card has not moved on yet.
+   *
+   * Normally the gap between complete() and advance() is one round trip and
+   * nobody sees this. It lasts when the move failed, and forever on a card
+   * finished under the retired approval model. Either way the phase is at
+   * 100% and nobody is working it, so showing it as live would be a lie about
+   * both the state and the person's whereabouts.
+   */
+  function settlingPanel(rows) {
+    var p = O.panel("Finished, waiting to move on",
+      "complete at 100% — they join the totals above once the card advances");
+    p.body(O.el("div", null, rows.map(function (e) {
+      return O.el("div.wf-rec-live.is-done", null,
+        O.el("div.wf-rec-state", null, O.el("b"), O.el("span", { text: "Complete" })),
+        O.el("div", null,
+          O.el("div.wf-job", { text: e.job }),
+          O.el("div.wf-jobsub", { text: e.who || "unclaimed" })),
+        progress(e.percent),
+        // No elapsed figure, for anybody. It is a finished number that the
+        // total beside it does not include, and the only thing to do with a
+        // number like that is add it in by hand and be wrong.
+        O.el("div"));
+    })));
+    return p;
   }
 
   function table(groups, totalHours) {
